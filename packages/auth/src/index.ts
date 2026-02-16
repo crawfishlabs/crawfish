@@ -13,3 +13,28 @@ export {
   upgradeUserRole,
   downgradeUserRole 
 } from './roles';
+
+// OAuth Integrations
+export {
+  IntegrationConnection,
+  CalendarEvent,
+  Calendar,
+  ZoomMeeting,
+  ZoomRecording,
+  PlaidAccount,
+  PlaidTransaction,
+  TransactionSync,
+  PlaidConnection,
+  Institution,
+  GoogleIntegration,
+  ZoomIntegration,
+  PlaidIntegration,
+  SlackIntegration,
+  IntegrationManager
+} from './integrations';
+
+// Token Encryption
+export { TokenEncryption, TokenKeyUtils } from './token-encryption';
+
+// Integration Routes
+export { default as integrationRoutes } from './integration-routes';
