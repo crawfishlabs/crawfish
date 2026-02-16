@@ -8,7 +8,7 @@ import {
   IntegrationManager, 
   GoogleIntegration, 
   ZoomIntegration, 
-  PlaidIntegration, 
+  StripeFinancialConnectionsIntegration, 
   SlackIntegration 
 } from './integrations';
 import { authMiddleware, AuthenticatedRequest } from './middleware';
@@ -22,7 +22,7 @@ router.use(authMiddleware);
 const integrationManager = new IntegrationManager();
 const googleIntegration = new GoogleIntegration();
 const zoomIntegration = new ZoomIntegration();
-const plaidIntegration = new PlaidIntegration();
+const stripeFinancialConnectionsIntegration = new StripeFinancialConnectionsIntegration();
 const slackIntegration = new SlackIntegration();
 
 // Error handler
@@ -126,40 +126,40 @@ router.get('/integrations/zoom/callback', async (req: Request, res: Response) =>
   }
 });
 
-// Plaid Routes
-router.post('/integrations/plaid/link-token', async (req: AuthenticatedRequest, res: Response) => {
+// Stripe Financial Connections Routes
+router.post('/integrations/stripe-financial-connections/create-session', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const linkToken = await plaidIntegration.createLinkToken(req.user!.uid);
+    const clientSecret = await stripeFinancialConnectionsIntegration.createLinkToken(req.user!.uid);
     
     res.json({ 
-      link_token: linkToken,
-      provider: 'plaid' 
+      client_secret: clientSecret,
+      provider: 'stripe-financial-connections' 
     });
   } catch (error) {
     handleIntegrationError(error, res);
   }
 });
 
-router.post('/integrations/plaid/exchange', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/integrations/stripe-financial-connections/complete-session', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { public_token } = req.body;
+    const { session_id } = req.body;
     
-    if (!public_token) {
+    if (!session_id) {
       return res.status(400).json({ 
-        error: 'public_token is required' 
+        error: 'session_id is required' 
       });
     }
     
-    const connection = await plaidIntegration.exchangePublicToken(
+    const session = await stripeFinancialConnectionsIntegration.exchangePublicToken(
       req.user!.uid, 
-      public_token
+      session_id
     );
     
     res.json({ 
       success: true,
-      institution: {
-        id: connection.institution_id,
-        name: connection.institution_name
+      session: {
+        id: session.id,
+        status: 'completed'
       }
     });
   } catch (error) {
@@ -232,7 +232,7 @@ router.delete('/integrations/:provider', async (req: AuthenticatedRequest, res: 
   try {
     const { provider } = req.params;
     
-    if (!['google', 'zoom', 'plaid', 'slack'].includes(provider)) {
+    if (!['google', 'zoom', 'stripe-financial-connections', 'slack'].includes(provider)) {
       return res.status(400).json({ 
         error: 'Invalid provider' 
       });
@@ -253,7 +253,7 @@ router.post('/integrations/:provider/refresh', async (req: AuthenticatedRequest,
   try {
     const { provider } = req.params;
     
-    if (!['google', 'zoom', 'plaid', 'slack'].includes(provider)) {
+    if (!['google', 'zoom', 'stripe-financial-connections', 'slack'].includes(provider)) {
       return res.status(400).json({ 
         error: 'Invalid provider' 
       });
@@ -287,10 +287,10 @@ router.get('/integrations/status', async (req: Request, res: Response) => {
         description: 'Access Zoom meetings and recordings'
       },
       {
-        provider: 'plaid',
-        name: 'Plaid Banking',
-        scopes: ['transactions'],
-        description: 'Connect your bank accounts for budget tracking'
+        provider: 'stripe-financial-connections',
+        name: 'Stripe Financial Connections',
+        scopes: ['accounts', 'transactions'],
+        description: 'Connect your bank accounts for budget tracking via Stripe'
       },
       {
         provider: 'slack',
@@ -313,9 +313,9 @@ router.get('/integrations/health', async (req: Request, res: Response) => {
       configured: !!(process.env.ZOOM_CLIENT_ID && process.env.ZOOM_CLIENT_SECRET),
       redirect_uri: process.env.ZOOM_REDIRECT_URI
     },
-    plaid: {
-      configured: !!(process.env.PLAID_CLIENT_ID && process.env.PLAID_SECRET),
-      environment: process.env.PLAID_ENV || 'sandbox'
+    'stripe-financial-connections': {
+      configured: !!process.env.STRIPE_SECRET_KEY,
+      environment: process.env.NODE_ENV || 'development'
     },
     slack: {
       configured: !!(process.env.SLACK_CLIENT_ID && process.env.SLACK_CLIENT_SECRET),
