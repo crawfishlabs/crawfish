@@ -3,29 +3,27 @@
     "target": "ES2020",
     "module": "commonjs",
     "lib": ["ES2020"],
+    "declaration": true,
+    "outDir": "./dist",
+    "rootDir": "./",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "moduleResolution": "node",
-    "declaration": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
     "resolveJsonModule": true,
-    "sourceMap": true
+    "moduleResolution": "node",
+    "allowSyntheticDefaultImports": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
   },
+  "include": [
+    "src/**/*",
+    "security/**/*"
+  ],
   "exclude": [
     "node_modules",
     "dist",
     "**/*.test.ts",
     "**/*.spec.ts"
-  ],
-  "references": [
-    { "path": "./packages/auth" },
-    { "path": "./packages/memory" },
-    { "path": "./packages/llm-router" },
-    { "path": "./packages/payments" },
-    { "path": "./packages/observability" },
-    { "path": "./packages/media" }
   ]
 }
