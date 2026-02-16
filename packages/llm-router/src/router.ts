@@ -1421,10 +1421,11 @@ let providerInstances: {
 } = {};
 
 /**
- * Route an LLM call to the appropriate model and provider with intelligent preference handling
+ * Route an LLM call to the appropriate model and provider with budget enforcement
  * 
  * @param requestType - Type of request determining model selection
  * @param prompt - User prompt/message
+ * @param userId - User ID for budget enforcement (required)
  * @param context - Additional context data (optional)
  * @param options - Call options (optional, will be merged with defaults)
  * @returns Promise resolving to LLM response
@@ -1432,6 +1433,7 @@ let providerInstances: {
 export async function routeLLMCall(
   requestType: RequestType,
   prompt: string,
+  userId: string,
   context?: any,
   options: LLMCallOptions = {}
 ): Promise<LLMResponse> {
@@ -1439,34 +1441,69 @@ export async function routeLLMCall(
   const startTime = Date.now();
   
   try {
-    // Determine routing preference (with budget enforcement)
+    // Import budget functions (dynamic to avoid circular dependencies)
+    const { checkBudget, deductBudget } = await import('./user-budget');
+    const { createDegradedModelRouting, hasDegradedRouting } = await import('./degraded-router');
+    
+    // Check user budget status first
+    const budgetStatus = await checkBudget(userId);
+    
+    // Block users who are not allowed to use AI
+    if (!budgetStatus.allowed) {
+      const error = new Error(`AI budget exhausted for user ${userId}: ${budgetStatus.status}`) as LLMError;
+      error.provider = 'anthropic'; // Placeholder
+      error.model = 'claude-haiku-3-5'; // Placeholder
+      error.errorType = LLMErrorType.BUDGET_EXCEEDED;
+      error.retryable = false;
+      throw error;
+    }
+    
+    // Determine routing preference based on budget status
     let activePreference = options.preferenceOverride || routerConfig.preference;
     let originalPreference = activePreference;
     let preferenceDowngraded = false;
+    let useDegradedRouting = false;
     
-    // Check budget constraints and potentially downgrade preference
-    if (options.metadata?.userId && budgetConfig.autoDowngrade) {
-      const budgetStatus = await checkBudgetConstraints(options.metadata.userId, requestType);
-      if (budgetStatus.shouldDowngrade && activePreference !== 'cost') {
-        if (activePreference === 'quality') {
-          activePreference = 'balanced';
-        } else if (activePreference === 'balanced') {
-          activePreference = 'cost';
-        }
+    if (budgetStatus.status === 'degraded') {
+      // Use degraded routing if available for this request type
+      if (hasDegradedRouting(requestType)) {
+        useDegradedRouting = true;
         preferenceDowngraded = true;
-        console.log(`Budget constraint: downgraded ${originalPreference} → ${activePreference} for user ${options.metadata.userId}`);
+        console.log(`Budget degraded: using degraded routing for user ${userId}, requestType ${requestType}`);
+      } else {
+        // Fall back to cost preference
+        activePreference = 'cost';
+        preferenceDowngraded = true;
+        console.log(`Budget degraded: downgraded to cost preference for user ${userId}, requestType ${requestType}`);
       }
+    } else if (budgetStatus.routingPreference === 'cost' && activePreference !== 'cost') {
+      // User is approaching budget limit, downgrade preference
+      activePreference = 'cost';
+      preferenceDowngraded = true;
+      console.log(`Budget approaching: downgraded ${originalPreference} → ${activePreference} for user ${userId}`);
     }
     
     // Get routing configuration for request type and preference
-    const routingConfig = MODEL_ROUTING[requestType];
-    if (!routingConfig) {
-      throw new Error(`Unknown request type: ${requestType}`);
-    }
+    let routing: ModelRouting;
     
-    const routing = routingConfig[activePreference];
-    if (!routing) {
-      throw new Error(`No routing config for ${requestType} with preference ${activePreference}`);
+    if (useDegradedRouting) {
+      // Use degraded routing table
+      const degradedRouting = createDegradedModelRouting(requestType);
+      if (!degradedRouting) {
+        throw new Error(`No degraded routing available for ${requestType}`);
+      }
+      routing = degradedRouting;
+    } else {
+      // Use normal routing table
+      const routingConfig = MODEL_ROUTING[requestType];
+      if (!routingConfig) {
+        throw new Error(`Unknown request type: ${requestType}`);
+      }
+      
+      routing = routingConfig[activePreference];
+      if (!routing) {
+        throw new Error(`No routing config for ${requestType} with preference ${activePreference}`);
+      }
     }
     
     // Handle model override
@@ -1483,10 +1520,11 @@ export async function routeLLMCall(
     const finalOptions: LLMCallOptions = {
       ...routing.defaultOptions,
       ...options,
-      metadata: options.metadata ? {
+      metadata: {
         requestType,
+        userId,
         ...options.metadata,
-      } : undefined,
+      },
     };
     
     // Try primary model first, then fallbacks
@@ -1506,26 +1544,26 @@ export async function routeLLMCall(
         const providerInstance = await getProviderInstance(provider);
         const response = await providerInstance.call(model, prompt, context, finalOptions);
         
+        // Deduct cost from user budget
+        await deductBudget(userId, response.estimatedCost, requestType, model);
+        
         // Track successful call
-        const userId = finalOptions.metadata?.userId;
-        if (userId) {
-          await trackLLMCall({
-            requestId,
-            userId,
-            requestType,
-            provider,
-            model,
-            inputTokens: response.usage.inputTokens,
-            outputTokens: response.usage.outputTokens,
-            totalTokens: response.usage.totalTokens,
-            cost: response.estimatedCost,
-            latencyMs: Date.now() - startTime,
-            success: true,
-            routingPreference: activePreference,
-            preferenceDowngraded,
-            timestamp: response.timestamp,
-          });
-        }
+        await trackLLMCall({
+          requestId,
+          userId,
+          requestType,
+          provider,
+          model,
+          inputTokens: response.usage.inputTokens,
+          outputTokens: response.usage.outputTokens,
+          totalTokens: response.usage.totalTokens,
+          cost: response.estimatedCost,
+          latencyMs: Date.now() - startTime,
+          success: true,
+          routingPreference: useDegradedRouting ? 'degraded' : activePreference,
+          preferenceDowngraded,
+          timestamp: response.timestamp,
+        });
         
         return {
           ...response,
@@ -1539,26 +1577,23 @@ export async function routeLLMCall(
         lastError = error as LLMError;
         
         // Track failed call
-        const userId = finalOptions.metadata?.userId;
-        if (userId) {
-          await trackLLMCall({
-            requestId,
-            userId,
-            requestType,
-            provider,
-            model,
-            inputTokens: 0,
-            outputTokens: 0,
-            totalTokens: 0,
-            cost: 0,
-            latencyMs: Date.now() - startTime,
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-            routingPreference: activePreference,
-            preferenceDowngraded,
-            timestamp: new Date(),
-          });
-        }
+        await trackLLMCall({
+          requestId,
+          userId,
+          requestType,
+          provider,
+          model,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          cost: 0,
+          latencyMs: Date.now() - startTime,
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+          routingPreference: useDegradedRouting ? 'degraded' : activePreference,
+          preferenceDowngraded,
+          timestamp: new Date(),
+        });
         
         // If not retryable, break the fallback chain
         if (!lastError.retryable) {

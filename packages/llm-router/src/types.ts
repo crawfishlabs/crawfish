@@ -39,7 +39,7 @@ export type LLMModel = AnthropicModel | OpenAIModel | GoogleModel;
 /**
  * Routing preferences for model selection
  */
-export type RoutingPreference = 'quality' | 'balanced' | 'cost';
+export type RoutingPreference = 'quality' | 'balanced' | 'cost' | 'degraded';
 
 /**
  * Router configuration
