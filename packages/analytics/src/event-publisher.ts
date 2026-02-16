@@ -1,6 +1,5 @@
-import { BigQuery } from '@google-cloud/bigquery';
 import { v4 as uuidv4 } from 'uuid';
-import BigQueryClient from './bigquery-config';
+import SnowflakeClient from './snowflake-config';
 
 export interface AnalyticsEvent {
   eventId?: string;
@@ -14,24 +13,37 @@ export interface BatchInsertOptions {
   maxBatchSize?: number;
   maxWaitTimeMs?: number;
   retryAttempts?: number;
+  enableUpsert?: boolean;
+  upsertIdColumn?: string;
 }
 
 export interface PublisherConfig {
   enableBatching?: boolean;
   batchOptions?: BatchInsertOptions;
   enableDedup?: boolean;
-  defaultInsertOptions?: any;
+  gcsStaging?: {
+    enabled: boolean;
+    bucketName: string;
+    stageName: string;
+  };
+}
+
+interface StagingData {
+  events: AnalyticsEvent[];
+  retryCount: number;
+  lastAttempt: Date;
 }
 
 class EventPublisher {
-  private bqClient: BigQueryClient;
+  private snowflakeClient: SnowflakeClient;
   private config: PublisherConfig;
   private eventBatches: Map<string, AnalyticsEvent[]> = new Map();
   private batchTimers: Map<string, NodeJS.Timeout> = new Map();
   private recentEventIds: Set<string> = new Set();
+  private stagingBuffer: Map<string, StagingData> = new Map();
 
-  constructor(bqClient: BigQueryClient, config: PublisherConfig = {}) {
-    this.bqClient = bqClient;
+  constructor(snowflakeClient: SnowflakeClient, config: PublisherConfig = {}) {
+    this.snowflakeClient = snowflakeClient;
     this.config = {
       enableBatching: config.enableBatching ?? true,
       enableDedup: config.enableDedup ?? true,
@@ -39,12 +51,14 @@ class EventPublisher {
         maxBatchSize: 100,
         maxWaitTimeMs: 5000,
         retryAttempts: 3,
+        enableUpsert: true,
+        upsertIdColumn: 'id',
         ...config.batchOptions,
       },
-      defaultInsertOptions: {
-        ignoreUnknownValues: true,
-        skipInvalidRows: false,
-        ...config.defaultInsertOptions,
+      gcsStaging: config.gcsStaging || {
+        enabled: false,
+        bucketName: 'claw-analytics-staging',
+        stageName: 'GCS_STAGE',
       },
     };
   }
@@ -56,9 +70,11 @@ class EventPublisher {
     eventName: string,
     eventData: AnalyticsEvent,
     options: {
-      datasetName?: string;
+      schemaName?: string;
       tableName?: string;
       immediate?: boolean;
+      enableUpsert?: boolean;
+      upsertIdColumn?: string;
     } = {}
   ): Promise<void> {
     // Generate event ID for deduplication if not provided
@@ -83,22 +99,29 @@ class EventPublisher {
     // Enrich event data with defaults
     const enrichedEvent: AnalyticsEvent = {
       ...eventData,
+      id: eventId, // Ensure we have an id field for Snowflake
       eventId,
       timestamp: eventData.timestamp || new Date(),
     };
 
     // Determine target table
-    const { datasetName, tableName } = this.resolveTarget(eventName, options);
-    const tableKey = `${datasetName}.${tableName}`;
+    const { schemaName, tableName } = this.resolveTarget(eventName, options);
+    const tableKey = `${schemaName}.${tableName}`;
 
     // Insert immediately if requested or batching disabled
     if (options.immediate || !this.config.enableBatching) {
-      await this.insertEvents(datasetName, tableName, [enrichedEvent]);
+      await this.insertEvents(schemaName, tableName, [enrichedEvent], {
+        enableUpsert: options.enableUpsert ?? this.config.batchOptions!.enableUpsert,
+        upsertIdColumn: options.upsertIdColumn ?? this.config.batchOptions!.upsertIdColumn!,
+      });
       return;
     }
 
     // Add to batch
-    await this.addToBatch(tableKey, enrichedEvent);
+    await this.addToBatch(tableKey, enrichedEvent, {
+      enableUpsert: options.enableUpsert ?? this.config.batchOptions!.enableUpsert,
+      upsertIdColumn: options.upsertIdColumn ?? this.config.batchOptions!.upsertIdColumn!,
+    });
   }
 
   /**
@@ -108,11 +131,13 @@ class EventPublisher {
     events: Array<{
       eventName: string;
       eventData: AnalyticsEvent;
-      datasetName?: string;
+      schemaName?: string;
       tableName?: string;
+      enableUpsert?: boolean;
+      upsertIdColumn?: string;
     }>
   ): Promise<void> {
-    const batches: Map<string, AnalyticsEvent[]> = new Map();
+    const batches: Map<string, { events: AnalyticsEvent[]; options: any }> = new Map();
 
     for (const event of events) {
       const eventId = event.eventData.eventId || uuidv4();
@@ -123,17 +148,24 @@ class EventPublisher {
 
       const enrichedEvent: AnalyticsEvent = {
         ...event.eventData,
+        id: eventId,
         eventId,
         timestamp: event.eventData.timestamp || new Date(),
       };
 
-      const { datasetName, tableName } = this.resolveTarget(event.eventName, event);
-      const tableKey = `${datasetName}.${tableName}`;
+      const { schemaName, tableName } = this.resolveTarget(event.eventName, event);
+      const tableKey = `${schemaName}.${tableName}`;
 
       if (!batches.has(tableKey)) {
-        batches.set(tableKey, []);
+        batches.set(tableKey, { 
+          events: [], 
+          options: {
+            enableUpsert: event.enableUpsert ?? this.config.batchOptions!.enableUpsert,
+            upsertIdColumn: event.upsertIdColumn ?? this.config.batchOptions!.upsertIdColumn!,
+          }
+        });
       }
-      batches.get(tableKey)!.push(enrichedEvent);
+      batches.get(tableKey)!.events.push(enrichedEvent);
 
       if (this.config.enableDedup) {
         this.recentEventIds.add(eventId);
@@ -141,9 +173,9 @@ class EventPublisher {
     }
 
     // Insert all batches
-    const insertPromises = Array.from(batches.entries()).map(([tableKey, batchEvents]) => {
-      const [datasetName, tableName] = tableKey.split('.');
-      return this.insertEvents(datasetName, tableName, batchEvents);
+    const insertPromises = Array.from(batches.entries()).map(([tableKey, batchData]) => {
+      const [schemaName, tableName] = tableKey.split('.');
+      return this.insertEvents(schemaName, tableName, batchData.events, batchData.options);
     });
 
     await Promise.all(insertPromises);
@@ -154,8 +186,11 @@ class EventPublisher {
    */
   async flush(): Promise<void> {
     const flushPromises = Array.from(this.eventBatches.entries()).map(([tableKey, events]) => {
-      const [datasetName, tableName] = tableKey.split('.');
-      return this.insertEvents(datasetName, tableName, events);
+      const [schemaName, tableName] = tableKey.split('.');
+      return this.insertEvents(schemaName, tableName, events, {
+        enableUpsert: this.config.batchOptions!.enableUpsert,
+        upsertIdColumn: this.config.batchOptions!.upsertIdColumn!,
+      });
     });
 
     // Clear all batches and timers
@@ -175,8 +210,10 @@ class EventPublisher {
       userId,
       ...workoutData,
     }, {
-      datasetName: this.bqClient.getDatasets().fitness,
-      tableName: 'workouts'
+      schemaName: this.snowflakeClient.getSchemas().fitness,
+      tableName: 'workouts',
+      enableUpsert: true,
+      upsertIdColumn: 'id'
     });
   }
 
@@ -185,8 +222,10 @@ class EventPublisher {
       userId,
       ...mealData,
     }, {
-      datasetName: this.bqClient.getDatasets().nutrition,
-      tableName: 'food_logs'
+      schemaName: this.snowflakeClient.getSchemas().nutrition,
+      tableName: 'food_logs',
+      enableUpsert: true,
+      upsertIdColumn: 'id'
     });
   }
 
@@ -195,8 +234,10 @@ class EventPublisher {
       userId,
       ...meetingData,
     }, {
-      datasetName: this.bqClient.getDatasets().meetings,
-      tableName: 'meetings'
+      schemaName: this.snowflakeClient.getSchemas().meetings,
+      tableName: 'meetings',
+      enableUpsert: true,
+      upsertIdColumn: 'id'
     });
   }
 
@@ -205,8 +246,10 @@ class EventPublisher {
       userId,
       ...transactionData,
     }, {
-      datasetName: this.bqClient.getDatasets().budget,
-      tableName: 'transactions'
+      schemaName: this.snowflakeClient.getSchemas().budget,
+      tableName: 'transactions',
+      enableUpsert: true,
+      upsertIdColumn: 'id'
     });
   }
 
@@ -215,8 +258,10 @@ class EventPublisher {
       userId,
       ...llmData,
     }, {
-      datasetName: this.bqClient.getDatasets().crossApp,
-      tableName: 'llm_usage'
+      schemaName: this.snowflakeClient.getSchemas().crossApp,
+      tableName: 'llm_usage',
+      enableUpsert: true,
+      upsertIdColumn: 'id'
     });
   }
 
@@ -225,8 +270,9 @@ class EventPublisher {
       userId,
       ...featureData,
     }, {
-      datasetName: this.bqClient.getDatasets().crossApp,
-      tableName: 'feature_usage'
+      schemaName: this.snowflakeClient.getSchemas().crossApp,
+      tableName: 'feature_usage',
+      enableUpsert: false // Append-only for feature usage
     });
   }
 
@@ -235,8 +281,9 @@ class EventPublisher {
       userId,
       ...errorData,
     }, {
-      datasetName: this.bqClient.getDatasets().crossApp,
-      tableName: 'errors'
+      schemaName: this.snowflakeClient.getSchemas().crossApp,
+      tableName: 'errors',
+      enableUpsert: false // Append-only for errors
     });
   }
 
@@ -245,33 +292,38 @@ class EventPublisher {
       userId,
       ...funnelData,
     }, {
-      datasetName: this.bqClient.getDatasets().crossApp,
-      tableName: 'funnel_events'
+      schemaName: this.snowflakeClient.getSchemas().crossApp,
+      tableName: 'funnel_events',
+      enableUpsert: false // Append-only for funnel events
     });
   }
 
-  private resolveTarget(eventName: string, options: any): { datasetName: string; tableName: string } {
-    if (options.datasetName && options.tableName) {
-      return { datasetName: options.datasetName, tableName: options.tableName };
+  private resolveTarget(eventName: string, options: any): { schemaName: string; tableName: string } {
+    if (options.schemaName && options.tableName) {
+      return { schemaName: options.schemaName, tableName: options.tableName };
     }
 
-    const datasets = this.bqClient.getDatasets();
+    const schemas = this.snowflakeClient.getSchemas();
     
     // Default routing based on event name
     if (eventName.includes('workout') || eventName.includes('exercise')) {
-      return { datasetName: datasets.fitness, tableName: 'workouts' };
+      return { schemaName: schemas.fitness, tableName: 'workouts' };
     } else if (eventName.includes('meal') || eventName.includes('food') || eventName.includes('nutrition')) {
-      return { datasetName: datasets.nutrition, tableName: 'food_logs' };
+      return { schemaName: schemas.nutrition, tableName: 'food_logs' };
     } else if (eventName.includes('meeting') || eventName.includes('transcript')) {
-      return { datasetName: datasets.meetings, tableName: 'meetings' };
+      return { schemaName: schemas.meetings, tableName: 'meetings' };
     } else if (eventName.includes('transaction') || eventName.includes('budget') || eventName.includes('expense')) {
-      return { datasetName: datasets.budget, tableName: 'transactions' };
+      return { schemaName: schemas.budget, tableName: 'transactions' };
     } else {
-      return { datasetName: datasets.crossApp, tableName: 'feature_usage' };
+      return { schemaName: schemas.crossApp, tableName: 'feature_usage' };
     }
   }
 
-  private async addToBatch(tableKey: string, event: AnalyticsEvent): Promise<void> {
+  private async addToBatch(
+    tableKey: string, 
+    event: AnalyticsEvent, 
+    options: { enableUpsert?: boolean; upsertIdColumn?: string }
+  ): Promise<void> {
     if (!this.eventBatches.has(tableKey)) {
       this.eventBatches.set(tableKey, []);
     }
@@ -283,24 +335,27 @@ class EventPublisher {
 
     // Flush if batch size reached
     if (batch.length >= maxBatchSize!) {
-      await this.flushBatch(tableKey);
+      await this.flushBatch(tableKey, options);
       return;
     }
 
     // Set timer for batch flush if not already set
     if (!this.batchTimers.has(tableKey)) {
       const timer = setTimeout(() => {
-        this.flushBatch(tableKey).catch(console.error);
+        this.flushBatch(tableKey, options).catch(console.error);
       }, maxWaitTimeMs);
       this.batchTimers.set(tableKey, timer);
     }
   }
 
-  private async flushBatch(tableKey: string): Promise<void> {
+  private async flushBatch(
+    tableKey: string, 
+    options: { enableUpsert?: boolean; upsertIdColumn?: string }
+  ): Promise<void> {
     const batch = this.eventBatches.get(tableKey);
     if (!batch || batch.length === 0) return;
 
-    const [datasetName, tableName] = tableKey.split('.');
+    const [schemaName, tableName] = tableKey.split('.');
     
     // Clear batch and timer
     this.eventBatches.delete(tableKey);
@@ -310,10 +365,15 @@ class EventPublisher {
       this.batchTimers.delete(tableKey);
     }
 
-    await this.insertEvents(datasetName, tableName, batch);
+    await this.insertEvents(schemaName, tableName, batch, options);
   }
 
-  private async insertEvents(datasetName: string, tableName: string, events: AnalyticsEvent[]): Promise<void> {
+  private async insertEvents(
+    schemaName: string, 
+    tableName: string, 
+    events: AnalyticsEvent[],
+    options: { enableUpsert?: boolean; upsertIdColumn?: string }
+  ): Promise<void> {
     if (events.length === 0) return;
 
     const { retryAttempts } = this.config.batchOptions!;
@@ -321,12 +381,15 @@ class EventPublisher {
 
     for (let attempt = 0; attempt < retryAttempts!; attempt++) {
       try {
-        await this.bqClient.streamInsert(datasetName, tableName, events, this.config.defaultInsertOptions);
-        console.log(`Successfully inserted ${events.length} events to ${datasetName}.${tableName}`);
+        await this.snowflakeClient.batchInsert(schemaName, tableName, events, {
+          upsert: options.enableUpsert,
+          idColumn: options.upsertIdColumn
+        });
+        console.log(`Successfully inserted ${events.length} events to ${schemaName}.${tableName}`);
         return;
       } catch (error) {
         lastError = error as Error;
-        console.warn(`Insert attempt ${attempt + 1} failed for ${datasetName}.${tableName}:`, error);
+        console.warn(`Insert attempt ${attempt + 1} failed for ${schemaName}.${tableName}:`, error);
         
         if (attempt < retryAttempts! - 1) {
           // Exponential backoff
@@ -335,8 +398,51 @@ class EventPublisher {
       }
     }
 
+    // If direct insert fails, try staging approach if enabled
+    if (this.config.gcsStaging?.enabled) {
+      console.log(`Falling back to GCS staging for ${schemaName}.${tableName}`);
+      await this.stageEventsToGCS(schemaName, tableName, events);
+      return;
+    }
+
     console.error(`Failed to insert events after ${retryAttempts} attempts:`, lastError);
     throw lastError;
+  }
+
+  private async stageEventsToGCS(schemaName: string, tableName: string, events: AnalyticsEvent[]): Promise<void> {
+    const tableKey = `${schemaName}.${tableName}`;
+    
+    // Add to staging buffer for potential Snowpipe processing
+    this.stagingBuffer.set(tableKey, {
+      events,
+      retryCount: 0,
+      lastAttempt: new Date()
+    });
+
+    // Log for external processing (Cloud Function could pick this up)
+    console.log(`Staged ${events.length} events for ${tableKey} - implement GCS staging as needed`);
+    
+    // Note: Full GCS staging implementation would require:
+    // 1. Writing JSON files to GCS bucket with partitioning (date/app)
+    // 2. Snowpipe configuration to auto-ingest from external stage
+    // 3. Error handling and retry logic for failed files
+    
+    // For now, we log the failure - in production you'd implement full staging
+    throw new Error(`Direct insert failed and GCS staging not fully implemented for ${tableKey}`);
+  }
+
+  /**
+   * Get staging buffer status (for monitoring/debugging)
+   */
+  getStagingStatus(): Map<string, StagingData> {
+    return new Map(this.stagingBuffer);
+  }
+
+  /**
+   * Clear staging buffer
+   */
+  clearStagingBuffer(): void {
+    this.stagingBuffer.clear();
   }
 }
 

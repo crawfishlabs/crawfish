@@ -1,150 +1,186 @@
-// BigQuery table schemas for Cross-App data
+// Snowflake table schemas for Cross-App data
 
 export const crossAppSchemas = {
-  users: [
-    { name: 'id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'email', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'display_name', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'first_name', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'last_name', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'avatar_url', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'phone_number', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'timezone', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'locale', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'date_of_birth', type: 'DATE', mode: 'NULLABLE' },
-    { name: 'gender', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'signup_source', type: 'STRING', mode: 'NULLABLE' }, // organic, referral, ad_campaign, etc.
-    { name: 'referral_code', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'referred_by_user_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'apps_enabled', type: 'STRING', mode: 'REPEATED' }, // fitness, nutrition, meetings, budget
-    { name: 'onboarding_completed_at', type: 'TIMESTAMP', mode: 'NULLABLE' },
-    { name: 'last_active_at', type: 'TIMESTAMP', mode: 'NULLABLE' },
-    { name: 'email_verified', type: 'BOOLEAN', mode: 'NULLABLE' },
-    { name: 'phone_verified', type: 'BOOLEAN', mode: 'NULLABLE' },
-    { name: 'account_status', type: 'STRING', mode: 'NULLABLE' }, // active, suspended, deactivated
-    { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' },
-    { name: 'updated_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
-  ],
+  users: `
+    CREATE TABLE IF NOT EXISTS users (
+      id VARCHAR(255) NOT NULL PRIMARY KEY,
+      email VARCHAR(255) NOT NULL UNIQUE,
+      display_name VARCHAR(255),
+      first_name VARCHAR(255),
+      last_name VARCHAR(255),
+      avatar_url VARCHAR(1000),
+      phone_number VARCHAR(50),
+      timezone VARCHAR(50),
+      locale VARCHAR(10),
+      date_of_birth DATE,
+      gender VARCHAR(20),
+      signup_source VARCHAR(50), -- organic, referral, ad_campaign, etc.
+      referral_code VARCHAR(50),
+      referred_by_user_id VARCHAR(255),
+      apps_enabled VARIANT, -- JSON array: fitness, nutrition, meetings, budget
+      onboarding_completed_at TIMESTAMP_TZ,
+      last_active_at TIMESTAMP_TZ,
+      email_verified BOOLEAN DEFAULT FALSE,
+      phone_verified BOOLEAN DEFAULT FALSE,
+      account_status VARCHAR(20) DEFAULT 'active', -- active, suspended, deactivated
+      created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+      updated_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+      FOREIGN KEY (referred_by_user_id) REFERENCES users(id)
+    )
+    CLUSTER BY (account_status, DATE(created_at))
+    CHANGE_TRACKING = TRUE
+    COMMENT = 'User profiles and account information across all apps'
+  `,
 
-  subscriptions: [
-    { name: 'id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'user_id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'stripe_subscription_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'stripe_customer_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'plan_name', type: 'STRING', mode: 'NULLABLE' }, // free, basic, pro, enterprise
-    { name: 'plan_price_monthly', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'billing_cycle', type: 'STRING', mode: 'NULLABLE' }, // monthly, yearly
-    { name: 'status', type: 'STRING', mode: 'NULLABLE' }, // trial, active, past_due, cancelled, expired
-    { name: 'trial_start_date', type: 'DATE', mode: 'NULLABLE' },
-    { name: 'trial_end_date', type: 'DATE', mode: 'NULLABLE' },
-    { name: 'current_period_start', type: 'DATE', mode: 'NULLABLE' },
-    { name: 'current_period_end', type: 'DATE', mode: 'NULLABLE' },
-    { name: 'cancel_at_period_end', type: 'BOOLEAN', mode: 'NULLABLE' },
-    { name: 'cancelled_at', type: 'TIMESTAMP', mode: 'NULLABLE' },
-    { name: 'cancellation_reason', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'apps_included', type: 'STRING', mode: 'REPEATED' },
-    { name: 'feature_limits', type: 'STRING', mode: 'NULLABLE' }, // JSON string of limits
-    { name: 'payment_method_type', type: 'STRING', mode: 'NULLABLE' }, // card, bank_transfer, paypal
-    { name: 'discount_applied', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'coupon_code', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' },
-    { name: 'updated_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
-  ],
+  subscriptions: `
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id VARCHAR(255) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(255) NOT NULL,
+      stripe_subscription_id VARCHAR(255) UNIQUE,
+      stripe_customer_id VARCHAR(255),
+      plan_name VARCHAR(50), -- free, basic, pro, enterprise
+      plan_price_monthly NUMBER(8,2),
+      billing_cycle VARCHAR(20), -- monthly, yearly
+      status VARCHAR(20), -- trial, active, past_due, cancelled, expired
+      trial_start_date DATE,
+      trial_end_date DATE,
+      current_period_start DATE,
+      current_period_end DATE,
+      cancel_at_period_end BOOLEAN DEFAULT FALSE,
+      cancelled_at TIMESTAMP_TZ,
+      cancellation_reason VARCHAR(255),
+      apps_included VARIANT, -- JSON array of included apps
+      feature_limits VARIANT, -- JSON object of feature limits
+      payment_method_type VARCHAR(30), -- card, bank_transfer, paypal
+      discount_applied NUMBER(5,2),
+      coupon_code VARCHAR(50),
+      created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+      updated_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    CLUSTER BY (status, plan_name, DATE(current_period_end))
+    CHANGE_TRACKING = TRUE
+    COMMENT = 'User subscription and billing information'
+  `,
 
-  llm_usage: [
-    { name: 'id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'user_id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'app_name', type: 'STRING', mode: 'REQUIRED' }, // fitness, nutrition, meetings, budget
-    { name: 'task_type', type: 'STRING', mode: 'REQUIRED' }, // workout_generation, meal_planning, transcript_analysis, etc.
-    { name: 'model_name', type: 'STRING', mode: 'REQUIRED' }, // claude-3-sonnet, gpt-4, etc.
-    { name: 'provider', type: 'STRING', mode: 'REQUIRED' }, // anthropic, openai, google
-    { name: 'prompt_tokens', type: 'INTEGER', mode: 'NULLABLE' },
-    { name: 'completion_tokens', type: 'INTEGER', mode: 'NULLABLE' },
-    { name: 'total_tokens', type: 'INTEGER', mode: 'NULLABLE' },
-    { name: 'cost_cents', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'latency_ms', type: 'INTEGER', mode: 'NULLABLE' },
-    { name: 'success', type: 'BOOLEAN', mode: 'NULLABLE' },
-    { name: 'error_message', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'request_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'session_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'prompt_hash', type: 'STRING', mode: 'NULLABLE' }, // for deduplication analysis
-    { name: 'context_type', type: 'STRING', mode: 'NULLABLE' }, // coaching, analysis, generation, conversation
-    { name: 'input_length', type: 'INTEGER', mode: 'NULLABLE' },
-    { name: 'output_length', type: 'INTEGER', mode: 'NULLABLE' },
-    { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
-  ],
+  llm_usage: `
+    CREATE TABLE IF NOT EXISTS llm_usage (
+      id VARCHAR(255) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(255) NOT NULL,
+      app_name VARCHAR(20) NOT NULL, -- fitness, nutrition, meetings, budget
+      task_type VARCHAR(50) NOT NULL, -- workout_generation, meal_planning, transcript_analysis, etc.
+      model_name VARCHAR(50) NOT NULL, -- claude-3-sonnet, gpt-4, etc.
+      provider VARCHAR(20) NOT NULL, -- anthropic, openai, google
+      prompt_tokens NUMBER(38,0),
+      completion_tokens NUMBER(38,0),
+      total_tokens NUMBER(38,0),
+      cost_cents NUMBER(8,2),
+      latency_ms NUMBER(38,0),
+      success BOOLEAN,
+      error_message TEXT,
+      request_id VARCHAR(255),
+      session_id VARCHAR(255),
+      prompt_hash VARCHAR(64), -- for deduplication analysis
+      context_type VARCHAR(30), -- coaching, analysis, generation, conversation
+      input_length NUMBER(38,0),
+      output_length NUMBER(38,0),
+      created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    CLUSTER BY (app_name, DATE(created_at), user_id)
+    CHANGE_TRACKING = TRUE
+    COMMENT = 'LLM API usage tracking and cost monitoring'
+  `,
 
-  feature_usage: [
-    { name: 'id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'user_id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'app_name', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'feature_name', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'action', type: 'STRING', mode: 'REQUIRED' }, // view, create, edit, delete, export, etc.
-    { name: 'session_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'entity_type', type: 'STRING', mode: 'NULLABLE' }, // workout, meal, meeting, transaction, etc.
-    { name: 'entity_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'metadata', type: 'STRING', mode: 'NULLABLE' }, // JSON string of additional context
-    { name: 'duration_seconds', type: 'INTEGER', mode: 'NULLABLE' },
-    { name: 'success', type: 'BOOLEAN', mode: 'NULLABLE' },
-    { name: 'error_message', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'user_agent', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'ip_address', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'platform', type: 'STRING', mode: 'NULLABLE' }, // web, ios, android
-    { name: 'version', type: 'STRING', mode: 'NULLABLE' }, // app version
-    { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
-  ],
+  feature_usage: `
+    CREATE TABLE IF NOT EXISTS feature_usage (
+      id VARCHAR(255) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(255) NOT NULL,
+      app_name VARCHAR(20) NOT NULL,
+      feature_name VARCHAR(100) NOT NULL,
+      action VARCHAR(50) NOT NULL, -- view, create, edit, delete, export, etc.
+      session_id VARCHAR(255),
+      entity_type VARCHAR(50), -- workout, meal, meeting, transaction, etc.
+      entity_id VARCHAR(255),
+      metadata VARIANT, -- JSON object of additional context
+      duration_seconds NUMBER(38,0),
+      success BOOLEAN,
+      error_message TEXT,
+      user_agent TEXT,
+      ip_address VARCHAR(45),
+      platform VARCHAR(20), -- web, ios, android
+      version VARCHAR(20), -- app version
+      created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    CLUSTER BY (app_name, DATE(created_at), user_id)
+    CHANGE_TRACKING = TRUE
+    COMMENT = 'Feature usage tracking and user behavior analytics'
+  `,
 
-  errors: [
-    { name: 'id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'user_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'app_name', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'error_type', type: 'STRING', mode: 'REQUIRED' }, // client_error, server_error, validation_error
-    { name: 'error_code', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'error_message', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'stack_trace', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'request_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'session_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'url', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'http_method', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'http_status_code', type: 'INTEGER', mode: 'NULLABLE' },
-    { name: 'user_agent', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'ip_address', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'platform', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'version', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'environment', type: 'STRING', mode: 'NULLABLE' }, // production, staging, development
-    { name: 'severity', type: 'STRING', mode: 'NULLABLE' }, // low, medium, high, critical
-    { name: 'resolved', type: 'BOOLEAN', mode: 'NULLABLE' },
-    { name: 'resolved_at', type: 'TIMESTAMP', mode: 'NULLABLE' },
-    { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
-  ],
+  errors: `
+    CREATE TABLE IF NOT EXISTS errors (
+      id VARCHAR(255) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(255),
+      app_name VARCHAR(20) NOT NULL,
+      error_type VARCHAR(30) NOT NULL, -- client_error, server_error, validation_error
+      error_code VARCHAR(50),
+      error_message TEXT,
+      stack_trace TEXT,
+      request_id VARCHAR(255),
+      session_id VARCHAR(255),
+      url VARCHAR(2000),
+      http_method VARCHAR(10),
+      http_status_code NUMBER(3,0),
+      user_agent TEXT,
+      ip_address VARCHAR(45),
+      platform VARCHAR(20),
+      version VARCHAR(20),
+      environment VARCHAR(20), -- production, staging, development
+      severity VARCHAR(20), -- low, medium, high, critical
+      resolved BOOLEAN DEFAULT FALSE,
+      resolved_at TIMESTAMP_TZ,
+      created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    CLUSTER BY (app_name, severity, DATE(created_at))
+    CHANGE_TRACKING = TRUE
+    COMMENT = 'Application error tracking and monitoring'
+  `,
 
-  funnel_events: [
-    { name: 'id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'user_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'session_id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'anonymous_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'app_name', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'event_name', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'funnel_stage', type: 'STRING', mode: 'NULLABLE' }, // awareness, interest, consideration, purchase, retention
-    { name: 'page_url', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'referrer_url', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'utm_source', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'utm_medium', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'utm_campaign', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'utm_term', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'utm_content', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'event_properties', type: 'STRING', mode: 'NULLABLE' }, // JSON string
-    { name: 'user_agent', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'ip_address', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'country', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'region', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'city', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'platform', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'device_type', type: 'STRING', mode: 'NULLABLE' }, // desktop, mobile, tablet
-    { name: 'browser', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'os', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
-  ]
+  funnel_events: `
+    CREATE TABLE IF NOT EXISTS funnel_events (
+      id VARCHAR(255) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(255),
+      session_id VARCHAR(255) NOT NULL,
+      anonymous_id VARCHAR(255),
+      app_name VARCHAR(20) NOT NULL,
+      event_name VARCHAR(100) NOT NULL,
+      funnel_stage VARCHAR(30), -- awareness, interest, consideration, purchase, retention
+      page_url VARCHAR(2000),
+      referrer_url VARCHAR(2000),
+      utm_source VARCHAR(100),
+      utm_medium VARCHAR(100),
+      utm_campaign VARCHAR(100),
+      utm_term VARCHAR(100),
+      utm_content VARCHAR(100),
+      event_properties VARIANT, -- JSON object
+      user_agent TEXT,
+      ip_address VARCHAR(45),
+      country VARCHAR(100),
+      region VARCHAR(100),
+      city VARCHAR(100),
+      platform VARCHAR(20),
+      device_type VARCHAR(20), -- desktop, mobile, tablet
+      browser VARCHAR(50),
+      os VARCHAR(50),
+      created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+    CLUSTER BY (app_name, DATE(created_at), funnel_stage)
+    CHANGE_TRACKING = TRUE
+    COMMENT = 'User funnel events and conversion tracking'
+  `
 };
 
 export default crossAppSchemas;

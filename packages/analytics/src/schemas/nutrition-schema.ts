@@ -1,98 +1,124 @@
-// BigQuery table schemas for Nutrition app
+// Snowflake table schemas for Nutrition app
 
 export const nutritionSchemas = {
-  food_logs: [
-    { name: 'id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'user_id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'meal_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'food_item_id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'log_date', type: 'DATE', mode: 'REQUIRED' },
-    { name: 'log_time', type: 'TIME', mode: 'NULLABLE' },
-    { name: 'meal_type', type: 'STRING', mode: 'NULLABLE' }, // breakfast, lunch, dinner, snack
-    { name: 'quantity', type: 'FLOAT', mode: 'REQUIRED' },
-    { name: 'unit', type: 'STRING', mode: 'REQUIRED' }, // grams, oz, cups, etc.
-    { name: 'calories', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'protein_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'carbs_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'fat_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'fiber_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'sugar_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'sodium_mg', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'notes', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
-  ],
+  food_logs: `
+    CREATE TABLE IF NOT EXISTS food_logs (
+      id VARCHAR(255) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(255) NOT NULL,
+      meal_id VARCHAR(255),
+      food_item_id VARCHAR(255) NOT NULL,
+      log_date DATE NOT NULL,
+      log_time TIME,
+      meal_type VARCHAR(20), -- breakfast, lunch, dinner, snack
+      quantity NUMBER(8,2) NOT NULL,
+      unit VARCHAR(20) NOT NULL, -- grams, oz, cups, etc.
+      calories NUMBER(8,2),
+      protein_grams NUMBER(8,2),
+      carbs_grams NUMBER(8,2),
+      fat_grams NUMBER(8,2),
+      fiber_grams NUMBER(8,2),
+      sugar_grams NUMBER(8,2),
+      sodium_mg NUMBER(8,2),
+      notes TEXT,
+      created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP()
+    )
+    CLUSTER BY (user_id, log_date)
+    CHANGE_TRACKING = TRUE
+    COMMENT = 'Individual food intake logs'
+  `,
 
-  meals: [
-    { name: 'id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'user_id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'name', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'meal_type', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'recipe_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'meal_date', type: 'DATE', mode: 'REQUIRED' },
-    { name: 'meal_time', type: 'TIME', mode: 'NULLABLE' },
-    { name: 'total_calories', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'total_protein_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'total_carbs_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'total_fat_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'satisfaction_score', type: 'INTEGER', mode: 'NULLABLE' }, // 1-10
-    { name: 'prep_time_minutes', type: 'INTEGER', mode: 'NULLABLE' },
-    { name: 'photo_url', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'notes', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
-  ],
+  meals: `
+    CREATE TABLE IF NOT EXISTS meals (
+      id VARCHAR(255) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(255) NOT NULL,
+      name VARCHAR(500) NOT NULL,
+      meal_type VARCHAR(20),
+      recipe_id VARCHAR(255),
+      meal_date DATE NOT NULL,
+      meal_time TIME,
+      total_calories NUMBER(8,2),
+      total_protein_grams NUMBER(8,2),
+      total_carbs_grams NUMBER(8,2),
+      total_fat_grams NUMBER(8,2),
+      satisfaction_score NUMBER(2,0), -- 1-10
+      prep_time_minutes NUMBER(38,0),
+      photo_url VARCHAR(1000),
+      notes TEXT,
+      created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP()
+    )
+    CLUSTER BY (user_id, meal_date)
+    CHANGE_TRACKING = TRUE
+    COMMENT = 'Complete meals and their nutritional summaries'
+  `,
 
-  water_intake: [
-    { name: 'id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'user_id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'log_date', type: 'DATE', mode: 'REQUIRED' },
-    { name: 'log_time', type: 'TIME', mode: 'NULLABLE' },
-    { name: 'amount_ml', type: 'FLOAT', mode: 'REQUIRED' },
-    { name: 'beverage_type', type: 'STRING', mode: 'NULLABLE' }, // water, tea, coffee, etc.
-    { name: 'temperature', type: 'STRING', mode: 'NULLABLE' }, // cold, room_temp, hot
-    { name: 'notes', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
-  ],
+  water_intake: `
+    CREATE TABLE IF NOT EXISTS water_intake (
+      id VARCHAR(255) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(255) NOT NULL,
+      log_date DATE NOT NULL,
+      log_time TIME,
+      amount_ml NUMBER(8,2) NOT NULL,
+      beverage_type VARCHAR(50), -- water, tea, coffee, etc.
+      temperature VARCHAR(20), -- cold, room_temp, hot
+      notes TEXT,
+      created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP()
+    )
+    CLUSTER BY (user_id, log_date)
+    CHANGE_TRACKING = TRUE
+    COMMENT = 'Daily water and beverage intake tracking'
+  `,
 
-  daily_summaries: [
-    { name: 'id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'user_id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'summary_date', type: 'DATE', mode: 'REQUIRED' },
-    { name: 'total_calories', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'calories_goal', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'total_protein_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'protein_goal_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'total_carbs_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'carbs_goal_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'total_fat_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'fat_goal_grams', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'total_water_ml', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'water_goal_ml', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'meals_logged', type: 'INTEGER', mode: 'NULLABLE' },
-    { name: 'calories_adherence_percentage', type: 'FLOAT', mode: 'NULLABLE' },
-    { name: 'macro_adherence_score', type: 'FLOAT', mode: 'NULLABLE' }, // 0-1 score
-    { name: 'energy_level', type: 'INTEGER', mode: 'NULLABLE' }, // 1-10
-    { name: 'hunger_level', type: 'INTEGER', mode: 'NULLABLE' }, // 1-10
-    { name: 'notes', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' },
-    { name: 'updated_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
-  ],
+  daily_summaries: `
+    CREATE TABLE IF NOT EXISTS daily_summaries (
+      id VARCHAR(255) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(255) NOT NULL,
+      summary_date DATE NOT NULL,
+      total_calories NUMBER(8,2),
+      calories_goal NUMBER(8,2),
+      total_protein_grams NUMBER(8,2),
+      protein_goal_grams NUMBER(8,2),
+      total_carbs_grams NUMBER(8,2),
+      carbs_goal_grams NUMBER(8,2),
+      total_fat_grams NUMBER(8,2),
+      fat_goal_grams NUMBER(8,2),
+      total_water_ml NUMBER(8,2),
+      water_goal_ml NUMBER(8,2),
+      meals_logged NUMBER(38,0),
+      calories_adherence_percentage NUMBER(5,2),
+      macro_adherence_score NUMBER(3,2), -- 0-1 score
+      energy_level NUMBER(2,0), -- 1-10
+      hunger_level NUMBER(2,0), -- 1-10
+      notes TEXT,
+      created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+      updated_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+      UNIQUE (user_id, summary_date)
+    )
+    CLUSTER BY (user_id, summary_date)
+    CHANGE_TRACKING = TRUE
+    COMMENT = 'Daily nutrition summary and goal adherence tracking'
+  `,
 
-  coaching_sessions: [
-    { name: 'id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'user_id', type: 'STRING', mode: 'REQUIRED' },
-    { name: 'coach_id', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'session_date', type: 'TIMESTAMP', mode: 'REQUIRED' },
-    { name: 'session_type', type: 'STRING', mode: 'NULLABLE' }, // meal_planning, macro_adjustment, habit_building
-    { name: 'duration_minutes', type: 'INTEGER', mode: 'NULLABLE' },
-    { name: 'topics_discussed', type: 'STRING', mode: 'REPEATED' },
-    { name: 'meal_plan_changes', type: 'STRING', mode: 'REPEATED' },
-    { name: 'macro_adjustments', type: 'STRING', mode: 'NULLABLE' }, // JSON string of changes
-    { name: 'action_items', type: 'STRING', mode: 'REPEATED' },
-    { name: 'notes', type: 'STRING', mode: 'NULLABLE' },
-    { name: 'satisfaction_score', type: 'INTEGER', mode: 'NULLABLE' }, // 1-10
-    { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' },
-    { name: 'updated_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
-  ]
+  coaching_sessions: `
+    CREATE TABLE IF NOT EXISTS coaching_sessions (
+      id VARCHAR(255) NOT NULL PRIMARY KEY,
+      user_id VARCHAR(255) NOT NULL,
+      coach_id VARCHAR(255),
+      session_date TIMESTAMP_TZ NOT NULL,
+      session_type VARCHAR(50), -- meal_planning, macro_adjustment, habit_building
+      duration_minutes NUMBER(38,0),
+      topics_discussed VARIANT, -- JSON array of topics
+      meal_plan_changes VARIANT, -- JSON array of changes
+      macro_adjustments VARIANT, -- JSON object of changes
+      action_items VARIANT, -- JSON array of action items
+      notes TEXT,
+      satisfaction_score NUMBER(2,0), -- 1-10
+      created_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+      updated_at TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP()
+    )
+    CLUSTER BY (user_id, DATE(session_date))
+    CHANGE_TRACKING = TRUE
+    COMMENT = 'Nutrition coaching sessions and meal planning'
+  `
 };
 
 export default nutritionSchemas;

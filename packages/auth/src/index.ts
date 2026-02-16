@@ -21,14 +21,14 @@ export {
   Calendar,
   ZoomMeeting,
   ZoomRecording,
-  PlaidAccount,
-  PlaidTransaction,
+  StripeFinancialConnectionsAccount,
+  StripeTransaction,
   TransactionSync,
-  PlaidConnection,
+  StripeFinancialConnectionsSession,
   Institution,
   GoogleIntegration,
   ZoomIntegration,
-  PlaidIntegration,
+  StripeFinancialConnectionsIntegration,
   SlackIntegration,
   IntegrationManager
 } from './integrations';

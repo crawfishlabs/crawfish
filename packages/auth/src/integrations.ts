@@ -10,14 +10,14 @@ import crypto from 'crypto';
 
 // Firestore: users/{userId}/integrations/{provider}
 export interface IntegrationConnection {
-  provider: 'google' | 'zoom' | 'plaid' | 'slack';
+  provider: 'google' | 'zoom' | 'stripe-financial-connections' | 'slack';
   status: 'connected' | 'expired' | 'revoked';
   accessToken: string;  // encrypted at rest
   refreshToken: string; // encrypted at rest
   scopes: string[];
   connectedAt: admin.firestore.Timestamp;
   expiresAt?: admin.firestore.Timestamp;
-  metadata: Record<string, any>; // provider-specific (e.g., Plaid item_id)
+  metadata: Record<string, any>; // provider-specific (e.g., Stripe account_id)
 }
 
 export interface CalendarEvent {
@@ -57,41 +57,42 @@ export interface ZoomRecording {
   }[];
 }
 
-export interface PlaidAccount {
-  account_id: string;
-  name: string;
-  type: string;
-  subtype: string;
-  balances: {
-    available: number | null;
+export interface StripeFinancialConnectionsAccount {
+  id: string;
+  display_name: string;
+  category: string;
+  subcategory: string;
+  status: string;
+  balance: {
     current: number;
-    iso_currency_code: string;
+    available: number;
   };
+  institution_name: string;
+  last4: string;
 }
 
-export interface PlaidTransaction {
-  transaction_id: string;
-  account_id: string;
+export interface StripeTransaction {
+  id: string;
+  account: string;
   amount: number;
-  date: string;
-  name: string;
-  merchant_name?: string;
-  category: string[];
-  pending: boolean;
+  created: number;
+  description: string;
+  status: 'pending' | 'posted';
+  category?: string;
 }
 
 export interface TransactionSync {
-  added: PlaidTransaction[];
-  modified: PlaidTransaction[];
+  added: StripeTransaction[];
+  modified: StripeTransaction[];
   removed: string[];
   cursor: string;
 }
 
-export interface PlaidConnection {
-  item_id: string;
-  access_token: string;
-  institution_id: string;
-  institution_name: string;
+export interface StripeFinancialConnectionsSession {
+  id: string;
+  client_secret: string;
+  url: string;
+  accounts?: StripeFinancialConnectionsAccount[];
 }
 
 export interface Institution {
@@ -375,164 +376,164 @@ export class ZoomIntegration {
   }
 }
 
-// Plaid Integration
+// Stripe Financial Connections Integration
 // Used by: Budget (bank accounts, transactions)
-export class PlaidIntegration {
-  private readonly client: any;
+export class StripeFinancialConnectionsIntegration {
+  private stripe: any;
 
   constructor() {
-    // Initialize Plaid client (assuming plaid package is installed)
-    // This would need: npm install plaid
+    // Initialize Stripe client (assuming stripe package is installed)
+    // This would need: npm install stripe
+    // this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+    //   apiVersion: '2024-12-18.acacia'
+    // });
   }
 
-  // Generate Plaid Link token
+  // Create Financial Connections session
   async createLinkToken(userId: string): Promise<string> {
     try {
-      const request = {
-        user: { client_user_id: userId },
-        client_name: 'Claw Budget',
-        products: ['transactions'],
-        country_codes: ['US'],
-        language: 'en',
-        webhook: process.env.PLAID_WEBHOOK_URL,
+      const session = {
+        account_holder: {
+          type: 'consumer',
+          consumer: {
+            permissions: ['transactions', 'balances', 'ownership'],
+            filters: {
+              countries: ['US']
+            }
+          }
+        },
+        permissions: ['transactions', 'balances', 'ownership'],
+        filters: {
+          countries: ['US']
+        },
+        return_url: `${process.env.APP_URL}/settings/bank-accounts`
       };
 
-      // const response = await this.client.linkTokenCreate(request);
-      // return response.data.link_token;
+      // const response = await this.stripe.financialConnections.sessions.create(session);
+      // return response.client_secret;
       
-      // Placeholder - implement with actual Plaid SDK
-      return 'placeholder_link_token';
+      // Placeholder - implement with actual Stripe SDK
+      return 'placeholder_client_secret';
     } catch (error) {
-      console.error('Error creating Plaid link token:', error);
+      console.error('Error creating Stripe FC session:', error);
       throw error;
     }
   }
 
-  async exchangePublicToken(userId: string, publicToken: string): Promise<PlaidConnection> {
+  async exchangePublicToken(userId: string, sessionId: string): Promise<StripeFinancialConnectionsSession> {
     try {
-      // const response = await this.client.linkTokenExchange({
-      //   public_token: publicToken,
-      // });
+      // const session = await this.stripe.financialConnections.sessions.retrieve(sessionId);
+      // const accounts = session.accounts ? session.accounts.data : [];
 
-      // const { access_token, item_id } = response.data;
-
-      // Get institution info
-      // const institutionResponse = await this.client.institutionsGetById({
-      //   institution_id: response.data.institution_id,
-      //   country_codes: ['US'],
-      // });
-
-      const connection: PlaidConnection = {
-        item_id: 'placeholder_item_id',
-        access_token: 'placeholder_access_token',
-        institution_id: 'placeholder_institution_id',
-        institution_name: 'Bank of America'
+      const sessionData: StripeFinancialConnectionsSession = {
+        id: sessionId,
+        client_secret: 'placeholder_client_secret',
+        url: 'placeholder_url',
+        accounts: []
       };
 
-      // Save encrypted connection
+      // Save connection
       const integrationConnection: IntegrationConnection = {
-        provider: 'plaid',
+        provider: 'stripe-financial-connections',
         status: 'connected',
-        accessToken: await TokenEncryption.encrypt(connection.access_token),
-        refreshToken: '', // Plaid doesn't use refresh tokens
-        scopes: ['transactions'],
+        accessToken: '', // Stripe FC uses session-based access
+        refreshToken: '',
+        scopes: ['transactions', 'balances', 'ownership'],
         connectedAt: admin.firestore.Timestamp.now(),
         metadata: {
-          item_id: connection.item_id,
-          institution_id: connection.institution_id,
-          institution_name: connection.institution_name
+          session_id: sessionId,
+          account_ids: sessionData.accounts?.map(acc => acc.id) || []
         }
       };
 
       await this.saveConnection(userId, integrationConnection);
-      return connection;
+      return sessionData;
     } catch (error) {
-      console.error('Error exchanging Plaid public token:', error);
+      console.error('Error retrieving Stripe FC session:', error);
       throw error;
     }
   }
 
-  async getAccounts(userId: string): Promise<PlaidAccount[]> {
+  async getAccounts(userId: string): Promise<StripeFinancialConnectionsAccount[]> {
     try {
       const connection = await this.getConnection(userId);
       if (!connection || connection.status !== 'connected') {
-        throw new Error('Plaid not connected');
+        throw new Error('Stripe Financial Connections not connected');
       }
 
-      // const response = await this.client.accountsGet({
-      //   access_token: await TokenEncryption.decrypt(connection.accessToken),
+      // const accounts = await this.stripe.financialConnections.accounts.list({
+      //   session: connection.metadata?.session_id,
+      //   limit: 100
       // });
 
-      // return response.data.accounts;
+      // return accounts.data;
       
-      // Placeholder - implement with actual Plaid SDK
+      // Placeholder - implement with actual Stripe SDK
       return [];
     } catch (error) {
-      console.error('Error fetching Plaid accounts:', error);
+      console.error('Error fetching Stripe FC accounts:', error);
       throw error;
     }
   }
 
   async getTransactions(
     userId: string, 
+    accountId: string,
     startDate: string, 
     endDate: string
-  ): Promise<PlaidTransaction[]> {
+  ): Promise<StripeTransaction[]> {
     try {
       const connection = await this.getConnection(userId);
       if (!connection || connection.status !== 'connected') {
-        throw new Error('Plaid not connected');
+        throw new Error('Stripe Financial Connections not connected');
       }
 
-      // Use Plaid's Transactions Get API
-      // const response = await this.client.transactionsGet({
-      //   access_token: await TokenEncryption.decrypt(connection.accessToken),
-      //   start_date: startDate,
-      //   end_date: endDate,
+      // const transactions = await this.stripe.financialConnections.transactions.list({
+      //   account: accountId,
+      //   created: {
+      //     gte: Math.floor(new Date(startDate).getTime() / 1000),
+      //     lte: Math.floor(new Date(endDate).getTime() / 1000)
+      //   },
+      //   limit: 500
       // });
 
-      // return response.data.transactions;
+      // return transactions.data;
       
-      // Placeholder - implement with actual Plaid SDK
+      // Placeholder - implement with actual Stripe SDK
       return [];
     } catch (error) {
-      console.error('Error fetching Plaid transactions:', error);
+      console.error('Error fetching Stripe FC transactions:', error);
       throw error;
     }
   }
 
-  // Incremental sync using Plaid's Transactions Sync API
+  // Incremental sync using Stripe Financial Connections Transactions API
   async syncTransactions(userId: string): Promise<TransactionSync> {
     try {
       const connection = await this.getConnection(userId);
       if (!connection || connection.status !== 'connected') {
-        throw new Error('Plaid not connected');
+        throw new Error('Stripe Financial Connections not connected');
       }
 
-      // Get last sync cursor from metadata
-      const cursor = connection.metadata?.sync_cursor;
+      // Get accounts from connection metadata
+      const accountIds = connection.metadata?.account_ids || [];
+      
+      const allTransactions = [];
+      
+      // For each account, get recent transactions
+      // for (const accountId of accountIds) {
+      //   const transactions = await this.stripe.financialConnections.transactions.list({
+      //     account: accountId,
+      //     created: {
+      //       gte: Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000) // Last 7 days
+      //     },
+      //     limit: 100
+      //   });
+      //   
+      //   allTransactions.push(...transactions.data);
+      // }
 
-      // const response = await this.client.transactionsSync({
-      //   access_token: await TokenEncryption.decrypt(connection.accessToken),
-      //   cursor,
-      // });
-
-      // Update cursor in metadata
-      // await this.updateConnection(userId, {
-      //   metadata: { 
-      //     ...connection.metadata, 
-      //     sync_cursor: response.data.next_cursor 
-      //   }
-      // });
-
-      // return {
-      //   added: response.data.added,
-      //   modified: response.data.modified,
-      //   removed: response.data.removed,
-      //   cursor: response.data.next_cursor
-      // };
-
-      // Placeholder - implement with actual Plaid SDK
+      // Placeholder - implement with actual Stripe SDK
       return {
         added: [],
         modified: [],
@@ -540,50 +541,27 @@ export class PlaidIntegration {
         cursor: ''
       };
     } catch (error) {
-      console.error('Error syncing Plaid transactions:', error);
+      console.error('Error syncing Stripe FC transactions:', error);
       throw error;
     }
   }
 
-  async getInstitution(institutionId: string): Promise<Institution> {
-    try {
-      // const response = await this.client.institutionsGetById({
-      //   institution_id: institutionId,
-      //   country_codes: ['US'],
-      // });
-
-      // return response.data.institution;
-
-      // Placeholder - implement with actual Plaid SDK
-      return {
-        institution_id: institutionId,
-        name: 'Bank of America',
-        country_codes: ['US']
-      };
-    } catch (error) {
-      console.error('Error fetching institution:', error);
-      throw error;
-    }
-  }
-
-  async removeConnection(userId: string, itemId: string): Promise<void> {
+  async removeConnection(userId: string, accountId: string): Promise<void> {
     try {
       const connection = await this.getConnection(userId);
       if (!connection || connection.status !== 'connected') {
-        throw new Error('Plaid not connected');
+        throw new Error('Stripe Financial Connections not connected');
       }
 
-      // Remove from Plaid
-      // await this.client.itemRemove({
-      //   access_token: await TokenEncryption.decrypt(connection.accessToken),
-      // });
+      // Disconnect from Stripe
+      // await this.stripe.financialConnections.accounts.disconnect(accountId);
 
       // Remove from our database
       const db = admin.firestore();
       await db.collection('users').doc(userId)
-        .collection('integrations').doc('plaid').delete();
+        .collection('integrations').doc('stripe-financial-connections').delete();
     } catch (error) {
-      console.error('Error removing Plaid connection:', error);
+      console.error('Error removing Stripe FC connection:', error);
       throw error;
     }
   }
@@ -591,7 +569,7 @@ export class PlaidIntegration {
   private async getConnection(userId: string): Promise<IntegrationConnection | null> {
     const db = admin.firestore();
     const doc = await db.collection('users').doc(userId)
-      .collection('integrations').doc('plaid').get();
+      .collection('integrations').doc('stripe-financial-connections').get();
     
     return doc.exists ? doc.data() as IntegrationConnection : null;
   }
@@ -599,7 +577,7 @@ export class PlaidIntegration {
   private async saveConnection(userId: string, connection: IntegrationConnection): Promise<void> {
     const db = admin.firestore();
     await db.collection('users').doc(userId)
-      .collection('integrations').doc('plaid').set(connection);
+      .collection('integrations').doc('stripe-financial-connections').set(connection);
   }
 
   private async updateConnection(
@@ -608,7 +586,7 @@ export class PlaidIntegration {
   ): Promise<void> {
     const db = admin.firestore();
     await db.collection('users').doc(userId)
-      .collection('integrations').doc('plaid').update(updates);
+      .collection('integrations').doc('stripe-financial-connections').update(updates);
   }
 }
 
@@ -701,7 +679,7 @@ export class SlackIntegration {
 export class IntegrationManager {
   private googleIntegration = new GoogleIntegration();
   private zoomIntegration = new ZoomIntegration();
-  private plaidIntegration = new PlaidIntegration();
+  private stripeFinancialConnectionsIntegration = new StripeFinancialConnectionsIntegration();
   private slackIntegration = new SlackIntegration();
 
   async getConnection(
@@ -737,11 +715,13 @@ export class IntegrationManager {
     try {
       const db = admin.firestore();
       
-      if (provider === 'plaid') {
-        // Special handling for Plaid to remove from their side too
+      if (provider === 'stripe-financial-connections') {
+        // Special handling for Stripe FC to remove from their side too
         const connection = await this.getConnection(userId, provider);
-        if (connection?.metadata?.item_id) {
-          await this.plaidIntegration.removeConnection(userId, connection.metadata.item_id);
+        if (connection?.metadata?.account_ids) {
+          for (const accountId of connection.metadata.account_ids) {
+            await this.stripeFinancialConnectionsIntegration.removeConnection(userId, accountId);
+          }
         }
       }
 
