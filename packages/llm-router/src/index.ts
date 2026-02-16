@@ -12,3 +12,10 @@ export { FallbackChain, createFallbackChain } from './fallback';
 export { trackLLMCall, getCostEstimate } from './cost-tracker';
 export { PromptStore, PromptConfig, PromptVersion } from './prompt-store';
 export { DEFAULT_PROMPTS } from './default-prompts';
+export { 
+  createPromptAPIRoutes, 
+  PromptAPIResponse, 
+  PromptsListResponse, 
+  VersionHistoryResponse, 
+  PromptTestResponse 
+} from './prompt-api';
