@@ -1,0 +1,51 @@
+{
+  "app": "claw-fitness",
+  "version": "1.0.0",
+  "establishedAt": "2024-02-16",
+  "environment": "production",
+  "baselines": {
+    "api_latency": 180,
+    "llm_response_time": 1800,
+    "cold_start": 2000,
+    "rest_timer_accuracy": 50,
+    "workout_log_save": 350,
+    "exercise_search": 120,
+    "coach_response_start": 1200,
+    "workout_sync_time": 1500,
+    "timer_precision": 50,
+    "exercise_video_load": 800,
+    "screen_workout_load": 400,
+    "screen_history_load": 300,
+    "screen_exercises_load": 200,
+    "time_to_interactive_workout": 500,
+    "time_to_interactive_history": 400,
+    "memory_usage": 180000000,
+    "frame_rate": 58,
+    "offline_queue_depth": 0,
+    "network_call_duration": 150
+  },
+  "notes": {
+    "rest_timer_accuracy": "Critical for user trust - must stay under 100ms drift",
+    "workout_log_save": "Users save mid-set, must be reliable and fast",
+    "coach_response_start": "First token should arrive within 1.5s for good UX",
+    "exercise_search": "Users search frequently during workouts"
+  },
+  "alertThresholds": {
+    "rest_timer_accuracy": {
+      "warning": 80,
+      "critical": 100
+    },
+    "workout_log_save": {
+      "warning": 400,
+      "critical": 500
+    },
+    "exercise_search": {
+      "warning": 150,
+      "critical": 200
+    },
+    "coach_response_start": {
+      "warning": 1200,
+      "critical": 1500
+    }
+  }
+}

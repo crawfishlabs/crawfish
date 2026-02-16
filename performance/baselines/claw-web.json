@@ -1,0 +1,54 @@
+{
+  "app": "claw-web",
+  "version": "1.0.0",
+  "establishedAt": "2024-02-16",
+  "environment": "production",
+  "baselines": {
+    "api_latency": 150,
+    "llm_response_time": 1500,
+    "cold_start": 1500,
+    "page_load_time": 1200,
+    "first_contentful_paint": 800,
+    "largest_contentful_paint": 1500,
+    "cumulative_layout_shift": 0.05,
+    "first_input_delay": 50,
+    "time_to_interactive": 2000,
+    "bundle_size_js": 450000,
+    "bundle_size_css": 80000,
+    "image_optimization": 200,
+    "font_load_time": 300,
+    "network_call_duration": 100,
+    "cache_hit_rate": 85,
+    "service_worker_install": 500,
+    "offline_support": true,
+    "lighthouse_performance": 85,
+    "lighthouse_accessibility": 95,
+    "lighthouse_seo": 90
+  },
+  "notes": {
+    "page_load_time": "Overall page load including all resources",
+    "first_contentful_paint": "When users see first meaningful content",
+    "bundle_size_js": "Keep under 500KB for good mobile performance",
+    "cumulative_layout_shift": "Minimize layout shifts for better UX",
+    "cache_hit_rate": "Service worker and CDN cache effectiveness",
+    "lighthouse_performance": "Google Lighthouse performance score"
+  },
+  "alertThresholds": {
+    "page_load_time": {
+      "warning": 1500,
+      "critical": 2000
+    },
+    "first_contentful_paint": {
+      "warning": 1000,
+      "critical": 1200
+    },
+    "bundle_size_js": {
+      "warning": 450000,
+      "critical": 500000
+    },
+    "lighthouse_performance": {
+      "warning": 80,
+      "critical": 75
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "app": "claw-meetings",
+  "version": "1.0.0",
+  "establishedAt": "2024-02-16",
+  "environment": "production",
+  "baselines": {
+    "api_latency": 220,
+    "llm_response_time": 2200,
+    "cold_start": 2200,
+    "recording_start": 300,
+    "transcription_latency_per_minute": 20000,
+    "meeting_analysis": 45000,
+    "meeting_search": 1200,
+    "audio_upload": 5000,
+    "realtime_transcription": 4000,
+    "meeting_summary_generation": 90000,
+    "screen_meetings_load": 500,
+    "screen_recording_load": 200,
+    "screen_analysis_load": 600,
+    "time_to_interactive_meetings": 600,
+    "time_to_interactive_recording": 300,
+    "memory_usage": 200000000,
+    "frame_rate": 56,
+    "offline_queue_depth": 2,
+    "network_call_duration": 200
+  },
+  "notes": {
+    "recording_start": "Critical - cannot miss meeting start",
+    "transcription_latency_per_minute": "Real-time transcription quality depends on this",
+    "meeting_analysis": "Post-meeting analysis should be ready quickly",
+    "meeting_search": "Users need fast search across all meetings",
+    "audio_upload": "Needs to work reliably on poor WiFi"
+  },
+  "alertThresholds": {
+    "recording_start": {
+      "warning": 400,
+      "critical": 500
+    },
+    "transcription_latency_per_minute": {
+      "warning": 25000,
+      "critical": 30000
+    },
+    "meeting_analysis": {
+      "warning": 45000,
+      "critical": 60000
+    },
+    "meeting_search": {
+      "warning": 1500,
+      "critical": 2000
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "app": "claw-budget",
+  "version": "1.0.0",
+  "establishedAt": "2024-02-16",
+  "environment": "production",
+  "baselines": {
+    "api_latency": 160,
+    "llm_response_time": 1600,
+    "cold_start": 1800,
+    "budget_view_load": 350,
+    "transaction_save": 200,
+    "category_assignment": 60,
+    "receipt_scan_parse": 3500,
+    "bank_sync": 7000,
+    "report_generation": 1200,
+    "balance_calculation": 150,
+    "category_filtering": 100,
+    "export_generation": 4000,
+    "screen_budget_load": 350,
+    "screen_transactions_load": 280,
+    "screen_reports_load": 400,
+    "time_to_interactive_budget": 400,
+    "time_to_interactive_transactions": 350,
+    "memory_usage": 160000000,
+    "frame_rate": 59,
+    "offline_queue_depth": 5,
+    "network_call_duration": 120
+  },
+  "notes": {
+    "budget_view_load": "Must compete with YNAB's speed",
+    "transaction_save": "Quick entry is critical for adoption",
+    "category_assignment": "Must feel instant for good UX",
+    "receipt_scan_parse": "OCR + parsing, can optimize with better models",
+    "bank_sync": "Plaid integration, some latency expected",
+    "report_generation": "Complex queries, can add caching"
+  },
+  "alertThresholds": {
+    "budget_view_load": {
+      "warning": 400,
+      "critical": 500
+    },
+    "transaction_save": {
+      "warning": 250,
+      "critical": 300
+    },
+    "category_assignment": {
+      "warning": 80,
+      "critical": 100
+    },
+    "receipt_scan_parse": {
+      "warning": 4000,
+      "critical": 5000
+    },
+    "bank_sync": {
+      "warning": 8000,
+      "critical": 10000
+    },
+    "report_generation": {
+      "warning": 1500,
+      "critical": 2000
+    }
+  }
+}

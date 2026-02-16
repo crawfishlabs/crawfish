@@ -1,0 +1,52 @@
+{
+  "app": "claw-nutrition",
+  "version": "1.0.0",
+  "establishedAt": "2024-02-16",
+  "environment": "production",
+  "baselines": {
+    "api_latency": 200,
+    "llm_response_time": 2000,
+    "cold_start": 2500,
+    "photo_scan_result": 3200,
+    "barcode_lookup": 600,
+    "food_search": 180,
+    "daily_dashboard_load": 700,
+    "photo_processing": 1800,
+    "database_lookup": 400,
+    "macro_calculation": 80,
+    "screen_dashboard_load": 700,
+    "screen_scan_load": 300,
+    "screen_search_load": 200,
+    "time_to_interactive_dashboard": 800,
+    "time_to_interactive_scan": 400,
+    "memory_usage": 220000000,
+    "frame_rate": 57,
+    "offline_queue_depth": 0,
+    "network_call_duration": 180
+  },
+  "notes": {
+    "photo_scan_result": "Core feature - users expect results within 4s",
+    "barcode_lookup": "Must be instant for good scanning UX",
+    "food_search": "Fast search encourages manual logging",
+    "daily_dashboard_load": "Users check multiple times per day",
+    "photo_processing": "ML analysis time - can optimize with better models"
+  },
+  "alertThresholds": {
+    "photo_scan_result": {
+      "warning": 3500,
+      "critical": 4000
+    },
+    "barcode_lookup": {
+      "warning": 800,
+      "critical": 1000
+    },
+    "food_search": {
+      "warning": 250,
+      "critical": 300
+    },
+    "daily_dashboard_load": {
+      "warning": 800,
+      "critical": 1000
+    }
+  }
+}

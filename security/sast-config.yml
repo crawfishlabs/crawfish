@@ -1,0 +1,279 @@
+# Claw SAST Configuration
+# Shared Static Application Security Testing rules for all Claw apps
+
+rules:
+  # General Web Security
+  - id: sql-injection
+    severity: high
+    patterns:
+      - pattern: |
+          $query = "SELECT * FROM $table WHERE $condition = '" + $input + "'"
+      - pattern: |
+          db.query("SELECT * FROM users WHERE id = " + $userInput)
+      - pattern: |
+          query($template + $userInput)
+    message: "Potential SQL injection vulnerability - use parameterized queries"
+    fix: "Use prepared statements or parameterized queries"
+
+  - id: xss-vulnerability
+    severity: high
+    patterns:
+      - pattern: |
+          $element.innerHTML = $userInput
+      - pattern: |
+          document.write($userInput)
+      - pattern: |
+          $response.send($userInput)
+    message: "Potential XSS vulnerability - sanitize user input"
+    fix: "Use proper output encoding or sanitization libraries"
+
+  - id: ssrf-vulnerability
+    severity: high
+    patterns:
+      - pattern: |
+          fetch($userControlledUrl)
+      - pattern: |
+          axios.get($userInput)
+      - pattern: |
+          http.request($userProvidedOptions)
+    message: "Potential SSRF vulnerability - validate URLs"
+    fix: "Whitelist allowed domains and validate URLs"
+
+  - id: path-traversal
+    severity: high
+    patterns:
+      - pattern: |
+          fs.readFile($userInput)
+      - pattern: |
+          path.join($basePath, $userInput)
+      - pattern: |
+          res.sendFile($userInput)
+    message: "Potential path traversal vulnerability"
+    fix: "Validate and sanitize file paths, use path.resolve()"
+
+  - id: insecure-crypto
+    severity: medium
+    patterns:
+      - pattern: |
+          crypto.createHash('md5')
+      - pattern: |
+          crypto.createHash('sha1')
+      - pattern: |
+          crypto.createCipher('des', $key)
+    message: "Insecure cryptographic algorithm"
+    fix: "Use SHA-256 or stronger for hashing, AES-256 for encryption"
+
+  - id: hardcoded-secrets
+    severity: critical
+    patterns:
+      - pattern: |
+          const apiKey = "sk-..."
+      - pattern: |
+          password: "..."
+      - pattern: |
+          secret = "AIza..."
+    message: "Hardcoded secret detected"
+    fix: "Use environment variables or secure secret management"
+
+  - id: insecure-deserialization
+    severity: high
+    patterns:
+      - pattern: |
+          JSON.parse($untrustedInput)
+      - pattern: |
+          eval($userInput)
+      - pattern: |
+          Function($userInput)
+    message: "Insecure deserialization"
+    fix: "Validate input before parsing, avoid eval()"
+
+  # TypeScript/JavaScript Specific
+  - id: prototype-pollution
+    severity: high
+    language: typescript
+    patterns:
+      - pattern: |
+          $obj[$userInput] = $value
+      - pattern: |
+          $obj[constructor][prototype][$prop] = $value
+      - pattern: |
+          merge($target, $userControlledSource)
+    message: "Potential prototype pollution vulnerability"
+    fix: "Validate object keys, use Map instead of objects, freeze prototypes"
+
+  - id: unsafe-eval
+    severity: high
+    language: typescript
+    patterns:
+      - pattern: |
+          eval($input)
+      - pattern: |
+          Function($input)()
+      - pattern: |
+          new Function($input)
+      - pattern: |
+          setTimeout($stringCode, $delay)
+    message: "Unsafe use of eval or Function constructor"
+    fix: "Use safer alternatives like JSON.parse or proper parsing"
+
+  - id: unsafe-regex
+    severity: medium
+    language: typescript
+    patterns:
+      - pattern: |
+          new RegExp($userInput)
+      - pattern: |
+          $string.match($userControlledRegex)
+      - pattern: |
+          /($userInput)*/
+    message: "Potential ReDoS (Regular Expression Denial of Service)"
+    fix: "Validate regex patterns, use timeouts, avoid nested quantifiers"
+
+  - id: insecure-random
+    severity: medium
+    language: typescript
+    patterns:
+      - pattern: |
+          Math.random()
+      - pattern: |
+          Date.now()
+    message: "Insecure random number generation for security purposes"
+    fix: "Use crypto.randomBytes() or crypto.getRandomValues() for security"
+
+  # Swift Specific (iOS apps)
+  - id: insecure-data-storage-swift
+    severity: high
+    language: swift
+    patterns:
+      - pattern: |
+          UserDefaults.standard.set($sensitiveData, forKey: $key)
+      - pattern: |
+          $data.write(to: $url)
+      - pattern: |
+          NSKeyedArchiver.archiveRootObject($object, toFile: $file)
+    message: "Insecure data storage - sensitive data not encrypted"
+    fix: "Use Keychain Services for sensitive data storage"
+
+  - id: insecure-network-config-swift
+    severity: high
+    language: swift
+    patterns:
+      - pattern: |
+          allowsArbitraryLoads = true
+      - pattern: |
+          NSAllowsArbitraryLoads = true
+      - pattern: |
+          URLSessionConfiguration.default.tlsMinimumSupportedProtocol = .TLSv10
+    message: "Insecure network configuration"
+    fix: "Enforce HTTPS, use TLS 1.2+, avoid arbitrary loads"
+
+  - id: insufficient-transport-security-swift
+    severity: medium
+    language: swift
+    patterns:
+      - pattern: |
+          http://
+      - pattern: |
+          URLRequest(url: URL(string: "http://...")!)
+      - pattern: |
+          NSURLRequest(url: NSURL(string: "http://...")!)
+    message: "HTTP instead of HTTPS"
+    fix: "Use HTTPS for all network communications"
+
+  - id: weak-crypto-swift
+    severity: high
+    language: swift
+    patterns:
+      - pattern: |
+          CC_MD5($data, $length, $result)
+      - pattern: |
+          CC_SHA1($data, $length, $result)
+      - pattern: |
+          kSecAttrAccessibleAlways
+    message: "Weak cryptographic implementation"
+    fix: "Use SHA-256+, secure keychain accessibility options"
+
+# Configuration for different tools
+semgrep:
+  rules:
+    - auto  # Use Semgrep's default rules
+    - security  # Security-focused rules
+    - owasp-top-10  # OWASP Top 10 rules
+  
+  exclude:
+    - "node_modules/**"
+    - "*.test.*"
+    - "*.spec.*"
+    - "build/**"
+    - "dist/**"
+    - ".git/**"
+
+eslint-security:
+  extends:
+    - plugin:security/recommended
+  plugins:
+    - security
+  rules:
+    security/detect-object-injection: error
+    security/detect-non-literal-regexp: warn
+    security/detect-unsafe-regex: error
+    security/detect-buffer-noassert: error
+    security/detect-eval-with-expression: error
+    security/detect-no-csrf-before-method-override: error
+
+codeql:
+  queries:
+    - security-and-quality
+    - security-extended
+  paths:
+    - src/
+    - lib/
+    - packages/
+  paths-ignore:
+    - node_modules/
+    - test/
+    - "**/*.test.*"
+
+# Severity mapping for different tools
+severity_mapping:
+  critical:
+    - hardcoded-secrets
+    - sql-injection-high-confidence
+    - command-injection
+  high:
+    - sql-injection
+    - xss-vulnerability
+    - ssrf-vulnerability
+    - path-traversal
+    - prototype-pollution
+    - unsafe-eval
+    - insecure-data-storage-swift
+    - insecure-network-config-swift
+    - weak-crypto-swift
+  medium:
+    - insecure-crypto
+    - unsafe-regex
+    - insecure-random
+    - insufficient-transport-security-swift
+  low:
+    - code-quality-issues
+    - style-violations
+
+# Auto-fix capability flags
+auto_fixable:
+  - insecure-crypto  # Can suggest better algorithms
+  - hardcoded-secrets  # Can move to env vars
+  - unsafe-regex  # Can add bounds checking
+  - insecure-random  # Can replace with crypto.randomBytes
+
+# Integration settings
+reporting:
+  format: json
+  include_metrics: true
+  merge_duplicate_findings: true
+  confidence_threshold: medium
+
+performance:
+  max_scan_time: 900  # 15 minutes
+  parallel_jobs: 4
+  memory_limit: 2048  # MB
