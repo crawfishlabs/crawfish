@@ -11,36 +11,93 @@ import * as admin from 'firebase-admin';
 export type LLMProvider = 'anthropic' | 'openai' | 'google';
 
 /**
- * Available models by provider
+ * Available models by provider (current versions)
  */
 export type AnthropicModel = 
-  | 'claude-3-haiku-20240307'
-  | 'claude-3-sonnet-20240229'
-  | 'claude-3-opus-20240229'
-  | 'claude-3.5-sonnet-20241022';
+  | 'claude-opus-4-6'        // Best reasoning, $15/$75 per 1M tokens
+  | 'claude-sonnet-4-20250514' // Great balance, $3/$15
+  | 'claude-haiku-3-5'       // Fast + cheap, $0.25/$1.25
+  ;
 
 export type OpenAIModel = 
-  | 'gpt-4o-mini'
-  | 'gpt-4o'
-  | 'gpt-4-turbo'
-  | 'gpt-3.5-turbo';
+  | 'gpt-4o'               // Strong general, $2.50/$10
+  | 'gpt-4o-mini'          // Cheap + fast, $0.15/$0.60
+  | 'gpt-4.1'              // Latest, coding focus
+  | 'gpt-4.1-mini'         // Latest mini
+  | 'o3'                   // Reasoning
+  | 'o4-mini'              // Cheap reasoning
+  ;
 
 export type GoogleModel = 
-  | 'gemini-1.5-flash'
-  | 'gemini-1.5-pro'
-  | 'gemini-1.0-pro';
+  | 'gemini-2.5-pro'       // Best Google, long context
+  | 'gemini-2.5-flash'     // Fast + cheap
+  | 'gemini-2.0-flash'     // Very cheap
+  ;
 
 export type LLMModel = AnthropicModel | OpenAIModel | GoogleModel;
 
 /**
- * Request types for model routing
+ * Routing preferences for model selection
  */
-export type RequestType = 
+export type RoutingPreference = 'quality' | 'balanced' | 'cost';
+
+/**
+ * Router configuration
+ */
+export interface RouterConfig {
+  preference: RoutingPreference;  // default: 'quality'
+  maxCostPerCall?: number;        // budget cap per call
+  maxCostPerUserPerDay?: number;  // budget cap per user per day
+  enableFallback: boolean;
+  logAllCalls: boolean;
+}
+
+/**
+ * Request types for model routing - full coverage across all 4 Claw apps
+ */
+export type RequestType =
+  // Fitness
+  | 'fitness:coach-chat'           // Complex coaching → Opus/Sonnet
+  | 'fitness:workout-analysis'     // Analyze workout data → Sonnet
+  | 'fitness:exercise-recommend'   // Recommend exercises → Sonnet
+  | 'fitness:form-check'           // Check form from description → Sonnet
+  | 'fitness:quick-lookup'         // Exercise info, plate math → Haiku
+  // Nutrition  
+  | 'nutrition:meal-scan'          // Photo → food recognition → GPT-4o (vision)
+  | 'nutrition:meal-text'          // Text description → calories → Haiku
+  | 'nutrition:barcode-enrich'     // Enrich barcode data → Haiku
+  | 'nutrition:coach-chat'         // Nutrition coaching → Sonnet
+  | 'nutrition:weekly-insights'    // Pattern analysis → Sonnet
+  | 'nutrition:quick-log'          // Simple food logging → Haiku
+  // Meetings
+  | 'meetings:transcribe'          // Audio → text → Whisper (OpenAI)
+  | 'meetings:analyze'             // Full meeting analysis → Sonnet/Opus
+  | 'meetings:extract-actions'     // Pull action items → Sonnet
+  | 'meetings:leadership-score'    // Score competencies → Opus (needs nuance)
+  | 'meetings:leadership-coach'    // Coaching chat → Opus
+  | 'meetings:meeting-prep'        // Prep brief → Sonnet
+  | 'meetings:search'              // NL search → Haiku
+  | 'meetings:summarize'           // Quick summary → Sonnet
+  // Budget
+  | 'budget:categorize'            // Auto-categorize transaction → Haiku
+  | 'budget:coach-chat'            // Financial coaching → Sonnet
+  | 'budget:receipt-scan'          // Receipt photo → structured → GPT-4o mini
+  | 'budget:spending-analysis'     // Spending patterns → Sonnet
+  | 'budget:proactive-alert'       // Generate alerts → Haiku
+  | 'budget:ynab-import-map'       // Map YNAB categories → Sonnet
+  | 'budget:weekly-digest'         // Weekly summary → Sonnet
+  // Cross-app
+  | 'cross:memory-refresh'         // Weekly memory update → Sonnet
+  | 'cross:daily-overview'         // Cross-domain summary → Sonnet
+  | 'cross:security-review'        // Code security scan → Sonnet
+  | 'cross:performance-analysis'   // Perf root cause → Sonnet
+  // Legacy (for backward compatibility)
   | 'meal-scan' 
   | 'meal-text' 
   | 'coach-chat' 
   | 'workout-analysis' 
-  | 'memory-refresh';
+  | 'memory-refresh'
+  ;
 
 /**
  * LLM call options and configuration
@@ -59,6 +116,10 @@ export interface LLMCallOptions {
     base64: string;
     mimeType: string;
   };
+  /** Override routing preference for this call */
+  preferenceOverride?: RoutingPreference;
+  /** Force a specific model for this call */
+  modelOverride?: LLMModel;
   /** Additional metadata for cost tracking */
   metadata?: {
     userId: string;
@@ -97,6 +158,10 @@ export interface LLMResponse {
   timestamp: admin.firestore.Timestamp;
   /** Unique request ID for tracking */
   requestId: string;
+  /** Whether routing preference was downgraded due to budget */
+  preferenceDowngraded?: boolean;
+  /** Original preference before downgrade */
+  originalPreference?: RoutingPreference;
 }
 
 /**
@@ -125,6 +190,10 @@ export interface LLMCallRecord {
   success: boolean;
   /** Error message if failed */
   error?: string;
+  /** Routing preference used */
+  routingPreference?: RoutingPreference;
+  /** Whether preference was downgraded */
+  preferenceDowngraded?: boolean;
   /** Additional metadata */
   metadata?: any;
   /** Call timestamp */
@@ -147,6 +216,15 @@ export interface ModelRouting {
   }>;
   /** Default options for this request type */
   defaultOptions: Partial<LLMCallOptions>;
+}
+
+/**
+ * Routing table for different preferences
+ */
+export interface PreferenceRouting {
+  quality: ModelRouting;
+  balanced: ModelRouting;
+  cost: ModelRouting;
 }
 
 /**
@@ -217,6 +295,14 @@ export interface DailyCostSummary {
       calls: number;
     };
   };
+  /** Cost breakdown by routing preference */
+  byPreference: {
+    [preference: string]: {
+      cost: number;
+      tokens: number;
+      calls: number;
+    };
+  };
   /** Top users by spend */
   topUsers: Array<{
     userId: string;
@@ -225,6 +311,22 @@ export interface DailyCostSummary {
   }>;
   /** Generated timestamp */
   generatedAt: admin.firestore.Timestamp;
+}
+
+/**
+ * Budget enforcement configuration
+ */
+export interface BudgetConfig {
+  /** Maximum cost per call in USD */
+  maxCostPerCall: number;
+  /** Maximum cost per user per day in USD */
+  maxCostPerUserPerDay: number;
+  /** Maximum cost per app per day in USD */
+  maxCostPerAppPerDay: number;
+  /** Auto-downgrade preference when over budget */
+  autoDowngrade: boolean;
+  /** Alert thresholds (percentage of limit) */
+  alertThresholds: number[];
 }
 
 /**
@@ -238,6 +340,7 @@ export enum LLMErrorType {
   INSUFFICIENT_QUOTA = 'insufficient_quota',
   MODEL_UNAVAILABLE = 'model_unavailable',
   NETWORK_ERROR = 'network_error',
+  BUDGET_EXCEEDED = 'budget_exceeded',
 }
 
 /**

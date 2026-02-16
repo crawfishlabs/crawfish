@@ -1,6 +1,6 @@
 /**
  * @fileoverview LLM model routing and selection logic
- * @description Routes requests to appropriate models based on request type and requirements
+ * @description Routes requests to appropriate models based on request type, preferences, and budget
  */
 
 import { 
@@ -9,7 +9,11 @@ import {
   LLMModel, 
   LLMCallOptions, 
   LLMResponse, 
-  ModelRouting, 
+  ModelRouting,
+  PreferenceRouting, 
+  RoutingPreference,
+  RouterConfig,
+  BudgetConfig,
   LLMError, 
   LLMErrorType 
 } from './types';
@@ -17,100 +21,1392 @@ import { AnthropicProvider } from './providers/anthropic';
 import { OpenAIProvider } from './providers/openai';
 import { GoogleProvider } from './providers/google';
 import { createFallbackChain } from './fallback';
-import { trackLLMCall } from './cost-tracker';
+import { trackLLMCall, checkUsageLimits, getCostEstimate } from './cost-tracker';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
- * Model routing table - defines which models to use for each request type
+ * Global router configuration
  */
-const MODEL_ROUTING: Record<RequestType, ModelRouting> = {
+let routerConfig: RouterConfig = {
+  preference: 'quality',
+  enableFallback: true,
+  logAllCalls: true,
+};
+
+/**
+ * Global budget configuration
+ */
+let budgetConfig: BudgetConfig = {
+  maxCostPerCall: 0.50, // $0.50 per call max
+  maxCostPerUserPerDay: 10.00, // $10 per user per day
+  maxCostPerAppPerDay: 100.00, // $100 per app per day
+  autoDowngrade: true,
+  alertThresholds: [0.5, 0.8, 0.95], // 50%, 80%, 95% alerts
+};
+
+/**
+ * Full routing table with all 4 Claw apps and 3 preference levels
+ */
+const MODEL_ROUTING: Record<RequestType, PreferenceRouting> = {
+  // FITNESS ROUTES
+  'fitness:coach-chat': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-opus-4-6' }, // Needs deep reasoning
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+        { provider: 'openai', model: 'gpt-4o' },
+      ],
+      defaultOptions: {
+        maxTokens: 1500,
+        temperature: 0.4,
+        systemPrompt: 'You are Claw, an expert fitness coach. Provide personalized, evidence-based training advice.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.4,
+        systemPrompt: 'You are Claw, an expert fitness coach. Provide personalized, evidence-based training advice.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' }, // Still need quality for coaching
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'google', model: 'gemini-2.5-flash' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.3,
+        systemPrompt: 'You are Claw, a fitness coach. Provide helpful training advice.',
+      },
+    },
+  },
+
+  'fitness:workout-analysis': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.3,
+        systemPrompt: 'Analyze workout data and provide insights on form, progression, and optimization.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'google', model: 'gemini-2.5-flash' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.3,
+        systemPrompt: 'Analyze workout data and provide insights on form, progression, and optimization.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'Analyze workout data and provide basic insights.',
+      },
+    },
+  },
+
+  'fitness:exercise-recommend': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.3,
+        systemPrompt: 'Recommend exercises based on goals, equipment, and experience level.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.3,
+        systemPrompt: 'Recommend exercises based on goals, equipment, and experience level.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 600,
+        temperature: 0.2,
+        systemPrompt: 'Recommend exercises based on basic requirements.',
+      },
+    },
+  },
+
+  'fitness:form-check': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'Analyze exercise form and provide detailed corrections and safety tips.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 600,
+        temperature: 0.2,
+        systemPrompt: 'Analyze exercise form and provide corrections.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 400,
+        temperature: 0.2,
+        systemPrompt: 'Provide basic form feedback.',
+      },
+    },
+  },
+
+  'fitness:quick-lookup': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' }, // Quality > speed
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'google', model: 'gemini-2.5-flash' },
+      ],
+      defaultOptions: {
+        maxTokens: 400,
+        temperature: 0.1,
+        systemPrompt: 'Provide quick, accurate exercise information and calculations.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 300,
+        temperature: 0.1,
+        systemPrompt: 'Provide quick exercise information.',
+      },
+    },
+    cost: {
+      primary: { provider: 'google', model: 'gemini-2.0-flash' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 200,
+        temperature: 0.1,
+        systemPrompt: 'Quick exercise lookup.',
+      },
+    },
+  },
+
+  // NUTRITION ROUTES
+  'nutrition:meal-scan': {
+    quality: {
+      primary: { provider: 'openai', model: 'gpt-4o' }, // Best vision
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o-mini' },
+        { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.2,
+        isVision: true,
+        systemPrompt: 'Analyze the food in this image. Provide detailed nutritional breakdown.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'openai', model: 'gpt-4o' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o-mini' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        isVision: true,
+        systemPrompt: 'Analyze the food in this image and estimate nutrition.',
+      },
+    },
+    cost: {
+      primary: { provider: 'openai', model: 'gpt-4o-mini' }, // Still need vision
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 600,
+        temperature: 0.2,
+        isVision: true,
+        systemPrompt: 'Identify food and estimate basic nutrition.',
+      },
+    },
+  },
+
+  'nutrition:meal-text': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'Analyze meal description and provide detailed nutritional information.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 600,
+        temperature: 0.2,
+        systemPrompt: 'Analyze meal and provide nutrition info.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 400,
+        temperature: 0.1,
+        systemPrompt: 'Basic nutrition estimation.',
+      },
+    },
+  },
+
+  'nutrition:barcode-enrich': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 400,
+        temperature: 0.1,
+        systemPrompt: 'Enrich barcode nutrition data with additional context.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 300,
+        temperature: 0.1,
+        systemPrompt: 'Enrich barcode data.',
+      },
+    },
+    cost: {
+      primary: { provider: 'google', model: 'gemini-2.0-flash' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 200,
+        temperature: 0.1,
+        systemPrompt: 'Basic barcode enrichment.',
+      },
+    },
+  },
+
+  'nutrition:coach-chat': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.4,
+        systemPrompt: 'You are Claw, an expert nutrition coach. Provide personalized nutrition advice.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.4,
+        systemPrompt: 'You are a nutrition coach. Provide helpful nutrition advice.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' }, // Keep quality for coaching
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'google', model: 'gemini-2.5-flash' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.3,
+        systemPrompt: 'Provide nutrition coaching advice.',
+      },
+    },
+  },
+
+  'nutrition:weekly-insights': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1500,
+        temperature: 0.3,
+        systemPrompt: 'Analyze nutrition patterns and provide weekly insights.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.3,
+        systemPrompt: 'Analyze nutrition patterns.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'Basic nutrition analysis.',
+      },
+    },
+  },
+
+  'nutrition:quick-log': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 300,
+        temperature: 0.1,
+        systemPrompt: 'Quick food logging assistance.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 250,
+        temperature: 0.1,
+        systemPrompt: 'Quick food logging.',
+      },
+    },
+    cost: {
+      primary: { provider: 'google', model: 'gemini-2.0-flash' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 200,
+        temperature: 0.1,
+        systemPrompt: 'Log food.',
+      },
+    },
+  },
+
+  // MEETINGS ROUTES
+  'meetings:transcribe': {
+    quality: {
+      primary: { provider: 'openai', model: 'gpt-4o' }, // Whisper equivalent
+      fallbacks: [],
+      defaultOptions: {
+        maxTokens: 2000,
+        temperature: 0.1,
+        systemPrompt: 'Transcribe audio to text accurately.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'openai', model: 'gpt-4o' },
+      fallbacks: [],
+      defaultOptions: {
+        maxTokens: 2000,
+        temperature: 0.1,
+        systemPrompt: 'Transcribe audio to text.',
+      },
+    },
+    cost: {
+      primary: { provider: 'openai', model: 'gpt-4o-mini' },
+      fallbacks: [],
+      defaultOptions: {
+        maxTokens: 2000,
+        temperature: 0.1,
+        systemPrompt: 'Transcribe audio.',
+      },
+    },
+  },
+
+  'meetings:analyze': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-opus-4-6' }, // Complex analysis
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+        { provider: 'openai', model: 'gpt-4o' },
+      ],
+      defaultOptions: {
+        maxTokens: 2000,
+        temperature: 0.3,
+        systemPrompt: 'Provide comprehensive meeting analysis with insights and recommendations.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1500,
+        temperature: 0.3,
+        systemPrompt: 'Analyze meeting and provide insights.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.2,
+        systemPrompt: 'Basic meeting analysis.',
+      },
+    },
+  },
+
+  'meetings:extract-actions': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'Extract clear, actionable items from meeting transcripts.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 600,
+        temperature: 0.2,
+        systemPrompt: 'Extract action items.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 400,
+        temperature: 0.1,
+        systemPrompt: 'List action items.',
+      },
+    },
+  },
+
+  'meetings:leadership-score': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-opus-4-6' }, // Nuanced evaluation
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+        { provider: 'openai', model: 'gpt-4o' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.2,
+        systemPrompt: 'Score leadership competencies with detailed rationale.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-opus-4-6' }, // Keep quality
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+        { provider: 'openai', model: 'gpt-4o' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.2,
+        systemPrompt: 'Score leadership competencies.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'Basic leadership scoring.',
+      },
+    },
+  },
+
+  'meetings:leadership-coach': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-opus-4-6' }, // High-stakes coaching
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+        { provider: 'openai', model: 'gpt-4o' },
+      ],
+      defaultOptions: {
+        maxTokens: 1500,
+        temperature: 0.4,
+        systemPrompt: 'Provide expert leadership coaching with nuanced insights.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-opus-4-6' }, // Keep quality for coaching
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+        { provider: 'openai', model: 'gpt-4o' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.4,
+        systemPrompt: 'Provide leadership coaching.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' }, // Still need quality
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.3,
+        systemPrompt: 'Leadership coaching advice.',
+      },
+    },
+  },
+
+  'meetings:meeting-prep': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.3,
+        systemPrompt: 'Prepare comprehensive meeting briefs and agendas.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.3,
+        systemPrompt: 'Prepare meeting briefs.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 600,
+        temperature: 0.2,
+        systemPrompt: 'Basic meeting prep.',
+      },
+    },
+  },
+
+  'meetings:search': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 400,
+        temperature: 0.1,
+        systemPrompt: 'Search meeting transcripts and notes.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'google', model: 'gemini-2.5-flash' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 300,
+        temperature: 0.1,
+        systemPrompt: 'Search meetings.',
+      },
+    },
+    cost: {
+      primary: { provider: 'google', model: 'gemini-2.0-flash' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 200,
+        temperature: 0.1,
+        systemPrompt: 'Basic search.',
+      },
+    },
+  },
+
+  'meetings:summarize': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'Create concise, actionable meeting summaries.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 600,
+        temperature: 0.2,
+        systemPrompt: 'Summarize meeting.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 400,
+        temperature: 0.1,
+        systemPrompt: 'Basic summary.',
+      },
+    },
+  },
+
+  // BUDGET ROUTES
+  'budget:categorize': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' }, // High volume, pattern-based
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 200,
+        temperature: 0.1,
+        systemPrompt: 'Categorize transactions accurately based on description and patterns.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 150,
+        temperature: 0.1,
+        systemPrompt: 'Categorize transactions.',
+      },
+    },
+    cost: {
+      primary: { provider: 'google', model: 'gemini-2.0-flash' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 100,
+        temperature: 0.1,
+        systemPrompt: 'Auto-categorize.',
+      },
+    },
+  },
+
+  'budget:coach-chat': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.4,
+        systemPrompt: 'You are Claw, a financial coach. Provide personalized budgeting and financial advice.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.4,
+        systemPrompt: 'Provide financial coaching advice.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' }, // Keep quality for coaching
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'google', model: 'gemini-2.5-flash' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.3,
+        systemPrompt: 'Financial advice.',
+      },
+    },
+  },
+
+  'budget:receipt-scan': {
+    quality: {
+      primary: { provider: 'openai', model: 'gpt-4o-mini' }, // Vision, structured extraction
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 600,
+        temperature: 0.1,
+        isVision: true,
+        systemPrompt: 'Extract structured data from receipt images.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'openai', model: 'gpt-4o-mini' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 500,
+        temperature: 0.1,
+        isVision: true,
+        systemPrompt: 'Extract receipt data.',
+      },
+    },
+    cost: {
+      primary: { provider: 'openai', model: 'gpt-4o-mini' }, // Need vision
+      fallbacks: [],
+      defaultOptions: {
+        maxTokens: 400,
+        temperature: 0.1,
+        isVision: true,
+        systemPrompt: 'Basic receipt scan.',
+      },
+    },
+  },
+
+  'budget:spending-analysis': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.3,
+        systemPrompt: 'Analyze spending patterns and provide insights and recommendations.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.3,
+        systemPrompt: 'Analyze spending patterns.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'Basic spending analysis.',
+      },
+    },
+  },
+
+  'budget:proactive-alert': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 300,
+        temperature: 0.2,
+        systemPrompt: 'Generate helpful budget alerts and warnings.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'google', model: 'gemini-2.5-flash' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 250,
+        temperature: 0.2,
+        systemPrompt: 'Generate budget alerts.',
+      },
+    },
+    cost: {
+      primary: { provider: 'google', model: 'gemini-2.0-flash' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 200,
+        temperature: 0.1,
+        systemPrompt: 'Budget alerts.',
+      },
+    },
+  },
+
+  'budget:ynab-import-map': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'Map YNAB categories and handle import complexities.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 600,
+        temperature: 0.2,
+        systemPrompt: 'Map YNAB categories.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 400,
+        temperature: 0.1,
+        systemPrompt: 'Basic YNAB mapping.',
+      },
+    },
+  },
+
+  'budget:weekly-digest': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.3,
+        systemPrompt: 'Create comprehensive weekly budget summary and insights.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.3,
+        systemPrompt: 'Weekly budget summary.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 600,
+        temperature: 0.2,
+        systemPrompt: 'Basic weekly digest.',
+      },
+    },
+  },
+
+  // CROSS-APP ROUTES
+  'cross:memory-refresh': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 2000,
+        temperature: 0.2,
+        systemPrompt: 'Create comprehensive cross-domain memory updates and insights.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1500,
+        temperature: 0.2,
+        systemPrompt: 'Memory refresh update.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.2,
+        systemPrompt: 'Basic memory update.',
+      },
+    },
+  },
+
+  'cross:daily-overview': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1500,
+        temperature: 0.3,
+        systemPrompt: 'Create comprehensive daily overview across all domains.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.3,
+        systemPrompt: 'Daily overview summary.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'Basic daily overview.',
+      },
+    },
+  },
+
+  'cross:security-review': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.2,
+        systemPrompt: 'Perform thorough security code review and vulnerability assessment.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.2,
+        systemPrompt: 'Security code review.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.1,
+        systemPrompt: 'Basic security scan.',
+      },
+    },
+  },
+
+  'cross:performance-analysis': {
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.2,
+        systemPrompt: 'Analyze performance issues and provide root cause analysis.',
+      },
+    },
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.2,
+        systemPrompt: 'Performance analysis.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'Basic performance check.',
+      },
+    },
+  },
+
+  // LEGACY ROUTES (for backward compatibility)
   'meal-scan': {
-    primary: {
-      provider: 'openai',
-      model: 'gpt-4o-mini', // Good vision capabilities
+    quality: {
+      primary: { provider: 'openai', model: 'gpt-4o' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o-mini' },
+        { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.3,
+        isVision: true,
+        systemPrompt: 'You are a nutrition analysis AI. Analyze the food in the image and provide detailed nutritional breakdown.',
+      },
     },
-    fallbacks: [
-      { provider: 'anthropic', model: 'claude-3-haiku-20240307' },
-      { provider: 'google', model: 'gemini-1.5-flash' },
-    ],
-    defaultOptions: {
-      maxTokens: 1000,
-      temperature: 0.3,
-      isVision: true,
-      systemPrompt: `You are a nutrition analysis AI. Analyze the food in the image and provide:
-1. Detailed list of food items and portions
-2. Estimated calories and macronutrients
-3. Nutritional assessment and suggestions
-Be accurate and detailed in your analysis.`,
+    balanced: {
+      primary: { provider: 'openai', model: 'gpt-4o-mini' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.3,
+        isVision: true,
+        systemPrompt: 'Analyze the food in this image and estimate nutrition.',
+      },
+    },
+    cost: {
+      primary: { provider: 'openai', model: 'gpt-4o-mini' },
+      fallbacks: [],
+      defaultOptions: {
+        maxTokens: 600,
+        temperature: 0.2,
+        isVision: true,
+        systemPrompt: 'Identify food and estimate basic nutrition.',
+      },
     },
   },
+
   'meal-text': {
-    primary: {
-      provider: 'anthropic',
-      model: 'claude-3-haiku-20240307', // Fast and accurate for text
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'You are a nutrition assistant. Help users log their meals accurately.',
+      },
     },
-    fallbacks: [
-      { provider: 'google', model: 'gemini-1.5-flash' },
-      { provider: 'openai', model: 'gpt-4o-mini' },
-    ],
-    defaultOptions: {
-      maxTokens: 800,
-      temperature: 0.2,
-      systemPrompt: `You are a nutrition assistant. Help users log their meals accurately.
-Provide nutritional estimates and healthy suggestions based on the meal description.`,
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 600,
+        temperature: 0.2,
+        systemPrompt: 'Help log meals accurately.',
+      },
+    },
+    cost: {
+      primary: { provider: 'google', model: 'gemini-2.0-flash' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 400,
+        temperature: 0.1,
+        systemPrompt: 'Basic meal logging.',
+      },
     },
   },
+
   'coach-chat': {
-    primary: {
-      provider: 'anthropic',
-      model: 'claude-3.5-sonnet-20241022', // Best reasoning for coaching
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o' },
+      ],
+      defaultOptions: {
+        maxTokens: 1500,
+        temperature: 0.4,
+        systemPrompt: 'You are Claw, an expert fitness and nutrition coach. Provide personalized, evidence-based advice.',
+      },
     },
-    fallbacks: [
-      { provider: 'anthropic', model: 'claude-3-sonnet-20240229' },
-      { provider: 'openai', model: 'gpt-4o' },
-    ],
-    defaultOptions: {
-      maxTokens: 1500,
-      temperature: 0.4,
-      systemPrompt: `You are Claw, an expert fitness and nutrition coach. Provide personalized,
-evidence-based advice. Be supportive, motivational, and practical. Always consider the user's
-context, goals, and preferences when making recommendations.`,
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.4,
+        systemPrompt: 'You are Claw, a fitness and nutrition coach. Provide helpful advice.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'google', model: 'gemini-2.5-flash' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.3,
+        systemPrompt: 'Provide coaching advice.',
+      },
     },
   },
+
   'workout-analysis': {
-    primary: {
-      provider: 'anthropic',
-      model: 'claude-3.5-sonnet-20241022', // Good for detailed analysis
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'openai', model: 'gpt-4o' },
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      ],
+      defaultOptions: {
+        maxTokens: 1200,
+        temperature: 0.3,
+        systemPrompt: 'You are a fitness expert analyzing workout data. Provide insights on form, progression, and optimization.',
+      },
     },
-    fallbacks: [
-      { provider: 'openai', model: 'gpt-4o' },
-      { provider: 'anthropic', model: 'claude-3-sonnet-20240229' },
-    ],
-    defaultOptions: {
-      maxTokens: 1200,
-      temperature: 0.3,
-      systemPrompt: `You are a fitness expert analyzing workout data. Provide insights on:
-1. Exercise form and technique suggestions
-2. Progressive overload recommendations
-3. Recovery and injury prevention advice
-4. Workout plan optimization`,
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.3,
+        systemPrompt: 'Analyze workout data and provide insights.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 800,
+        temperature: 0.2,
+        systemPrompt: 'Basic workout analysis.',
+      },
     },
   },
+
   'memory-refresh': {
-    primary: {
-      provider: 'anthropic',
-      model: 'claude-3.5-sonnet-20241022', // Best for summarization
+    quality: {
+      primary: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+      fallbacks: [
+        { provider: 'anthropic', model: 'claude-haiku-3-5' },
+        { provider: 'openai', model: 'gpt-4o' },
+      ],
+      defaultOptions: {
+        maxTokens: 2000,
+        temperature: 0.2,
+        systemPrompt: 'You are creating memory summaries for fitness coaching. Analyze data and create actionable insights.',
+      },
     },
-    fallbacks: [
-      { provider: 'anthropic', model: 'claude-3-sonnet-20240229' },
-      { provider: 'openai', model: 'gpt-4o' },
-    ],
-    defaultOptions: {
-      maxTokens: 2000,
-      temperature: 0.2,
-      systemPrompt: `You are creating memory summaries for fitness coaching. Analyze the user's
-data and create concise, actionable insights. Focus on patterns, progress, and recommendations
-for the upcoming period.`,
+    balanced: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.5-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1500,
+        temperature: 0.2,
+        systemPrompt: 'Create memory summaries with insights.',
+      },
+    },
+    cost: {
+      primary: { provider: 'anthropic', model: 'claude-haiku-3-5' },
+      fallbacks: [
+        { provider: 'google', model: 'gemini-2.0-flash' },
+        { provider: 'openai', model: 'gpt-4o-mini' },
+      ],
+      defaultOptions: {
+        maxTokens: 1000,
+        temperature: 0.2,
+        systemPrompt: 'Basic memory refresh.',
+      },
     },
   },
 };
@@ -125,27 +1421,13 @@ let providerInstances: {
 } = {};
 
 /**
- * Route an LLM call to the appropriate model and provider
+ * Route an LLM call to the appropriate model and provider with intelligent preference handling
  * 
  * @param requestType - Type of request determining model selection
  * @param prompt - User prompt/message
  * @param context - Additional context data (optional)
  * @param options - Call options (optional, will be merged with defaults)
  * @returns Promise resolving to LLM response
- * 
- * @example
- * ```typescript
- * const response = await routeLLMCall(
- *   'meal-scan',
- *   'What food is in this image?',
- *   userContext,
- *   { 
- *     imageData: { base64: '...', mimeType: 'image/jpeg' },
- *     metadata: { userId: 'user123', requestType: 'meal-scan' }
- *   }
- * );
- * console.log(response.content);
- * ```
  */
 export async function routeLLMCall(
   requestType: RequestType,
@@ -157,10 +1439,44 @@ export async function routeLLMCall(
   const startTime = Date.now();
   
   try {
-    // Get routing configuration for request type
-    const routing = MODEL_ROUTING[requestType];
-    if (!routing) {
+    // Determine routing preference (with budget enforcement)
+    let activePreference = options.preferenceOverride || routerConfig.preference;
+    let originalPreference = activePreference;
+    let preferenceDowngraded = false;
+    
+    // Check budget constraints and potentially downgrade preference
+    if (options.metadata?.userId && budgetConfig.autoDowngrade) {
+      const budgetStatus = await checkBudgetConstraints(options.metadata.userId, requestType);
+      if (budgetStatus.shouldDowngrade && activePreference !== 'cost') {
+        if (activePreference === 'quality') {
+          activePreference = 'balanced';
+        } else if (activePreference === 'balanced') {
+          activePreference = 'cost';
+        }
+        preferenceDowngraded = true;
+        console.log(`Budget constraint: downgraded ${originalPreference} → ${activePreference} for user ${options.metadata.userId}`);
+      }
+    }
+    
+    // Get routing configuration for request type and preference
+    const routingConfig = MODEL_ROUTING[requestType];
+    if (!routingConfig) {
       throw new Error(`Unknown request type: ${requestType}`);
+    }
+    
+    const routing = routingConfig[activePreference];
+    if (!routing) {
+      throw new Error(`No routing config for ${requestType} with preference ${activePreference}`);
+    }
+    
+    // Handle model override
+    let finalRouting = routing;
+    if (options.modelOverride) {
+      const provider = getProviderForModel(options.modelOverride);
+      finalRouting = {
+        ...routing,
+        primary: { provider, model: options.modelOverride },
+      };
     }
     
     // Merge default options with provided options
@@ -173,15 +1489,19 @@ export async function routeLLMCall(
       } : undefined,
     };
     
-    // Create fallback chain if enabled
-    const fallbackChain = createFallbackChain(routing, finalOptions.fallback);
-    
-    // Try primary model first
+    // Try primary model first, then fallbacks
     let lastError: LLMError | null = null;
     
-    for (const { provider, model } of [routing.primary, ...routing.fallbacks]) {
+    for (const { provider, model } of [finalRouting.primary, ...finalRouting.fallbacks]) {
       try {
-        console.log(`Trying ${provider}/${model} for ${requestType} request`);
+        console.log(`Trying ${provider}/${model} for ${requestType} (${activePreference}) request`);
+        
+        // Estimate cost before making the call
+        const estimatedCost = getCostEstimate(provider, model, 1000, 500); // Rough estimate
+        if (budgetConfig.maxCostPerCall && estimatedCost > budgetConfig.maxCostPerCall) {
+          console.warn(`Skipping ${provider}/${model} - estimated cost $${estimatedCost} exceeds per-call limit $${budgetConfig.maxCostPerCall}`);
+          continue;
+        }
         
         const providerInstance = await getProviderInstance(provider);
         const response = await providerInstance.call(model, prompt, context, finalOptions);
@@ -201,6 +1521,8 @@ export async function routeLLMCall(
             cost: response.estimatedCost,
             latencyMs: Date.now() - startTime,
             success: true,
+            routingPreference: activePreference,
+            preferenceDowngraded,
             timestamp: response.timestamp,
           });
         }
@@ -208,6 +1530,8 @@ export async function routeLLMCall(
         return {
           ...response,
           requestId,
+          preferenceDowngraded,
+          originalPreference: preferenceDowngraded ? originalPreference : undefined,
         };
         
       } catch (error) {
@@ -230,6 +1554,8 @@ export async function routeLLMCall(
             latencyMs: Date.now() - startTime,
             success: false,
             error: error instanceof Error ? error.message : String(error),
+            routingPreference: activePreference,
+            preferenceDowngraded,
             timestamp: new Date(),
           });
         }
@@ -251,25 +1577,88 @@ export async function routeLLMCall(
 }
 
 /**
- * Get the configured model for a request type (for informational purposes)
- * 
- * @param requestType - Request type to check
- * @returns Primary model configuration
+ * Check budget constraints for a user
  */
-export function getModelForRequestType(requestType: RequestType): { provider: LLMProvider; model: LLMModel } {
+async function checkBudgetConstraints(userId: string, requestType: RequestType): Promise<{
+  shouldDowngrade: boolean;
+  reason?: string;
+}> {
+  try {
+    const usage = await checkUsageLimits(userId, requestType);
+    
+    // Check daily cost limit
+    if (budgetConfig.maxCostPerUserPerDay && usage.costToday >= budgetConfig.maxCostPerUserPerDay) {
+      return { shouldDowngrade: true, reason: 'Daily cost limit exceeded' };
+    }
+    
+    // Check if approaching limit (80% threshold)
+    if (budgetConfig.maxCostPerUserPerDay && usage.costToday >= budgetConfig.maxCostPerUserPerDay * 0.8) {
+      return { shouldDowngrade: true, reason: 'Approaching daily cost limit' };
+    }
+    
+    return { shouldDowngrade: false };
+  } catch (error) {
+    console.warn('Error checking budget constraints:', error);
+    return { shouldDowngrade: false };
+  }
+}
+
+/**
+ * Get provider name for a given model
+ */
+function getProviderForModel(model: LLMModel): LLMProvider {
+  if (model.includes('claude')) return 'anthropic';
+  if (model.includes('gpt') || model.includes('o3') || model.includes('o4')) return 'openai';
+  if (model.includes('gemini')) return 'google';
+  throw new Error(`Unknown provider for model: ${model}`);
+}
+
+/**
+ * Set global routing preference
+ */
+export function setRoutingPreference(preference: RoutingPreference): void {
+  routerConfig.preference = preference;
+  console.log(`Global routing preference set to: ${preference}`);
+}
+
+/**
+ * Get current routing preference
+ */
+export function getRoutingPreference(): RoutingPreference {
+  return routerConfig.preference;
+}
+
+/**
+ * Update router configuration
+ */
+export function updateRouterConfig(config: Partial<RouterConfig>): void {
+  routerConfig = { ...routerConfig, ...config };
+  console.log('Router configuration updated:', routerConfig);
+}
+
+/**
+ * Update budget configuration
+ */
+export function updateBudgetConfig(config: Partial<BudgetConfig>): void {
+  budgetConfig = { ...budgetConfig, ...config };
+  console.log('Budget configuration updated:', budgetConfig);
+}
+
+/**
+ * Get the configured model for a request type (for informational purposes)
+ */
+export function getModelForRequestType(requestType: RequestType, preference?: RoutingPreference): { provider: LLMProvider; model: LLMModel } {
   const routing = MODEL_ROUTING[requestType];
   if (!routing) {
     throw new Error(`Unknown request type: ${requestType}`);
   }
   
-  return routing.primary;
+  const activePreference = preference || routerConfig.preference;
+  return routing[activePreference].primary;
 }
 
 /**
  * Get or create provider instance
- * 
- * @param provider - Provider name
- * @returns Provider instance
  */
 async function getProviderInstance(provider: LLMProvider): Promise<AnthropicProvider | OpenAIProvider | GoogleProvider> {
   if (!providerInstances[provider]) {
@@ -292,30 +1681,22 @@ async function getProviderInstance(provider: LLMProvider): Promise<AnthropicProv
 }
 
 /**
- * Update model routing configuration (for dynamic routing changes)
- * 
- * @param requestType - Request type to update
- * @param routing - New routing configuration
+ * Update model routing configuration for a specific request type
  */
-export function updateModelRouting(requestType: RequestType, routing: ModelRouting): void {
-  MODEL_ROUTING[requestType] = routing;
+export function updateModelRouting(requestType: RequestType, routing: Partial<PreferenceRouting>): void {
+  MODEL_ROUTING[requestType] = { ...MODEL_ROUTING[requestType], ...routing };
   console.log(`Updated routing for ${requestType}:`, routing);
 }
 
 /**
  * Get current routing configuration for a request type
- * 
- * @param requestType - Request type
- * @returns Current routing configuration
  */
-export function getRoutingConfig(requestType: RequestType): ModelRouting {
+export function getRoutingConfig(requestType: RequestType): PreferenceRouting {
   return MODEL_ROUTING[requestType];
 }
 
 /**
  * Health check for all providers
- * 
- * @returns Promise resolving to provider health status
  */
 export async function healthCheckProviders(): Promise<{ [provider: string]: boolean }> {
   const results: { [provider: string]: boolean } = {};
@@ -323,9 +1704,11 @@ export async function healthCheckProviders(): Promise<{ [provider: string]: bool
   for (const provider of ['anthropic', 'openai', 'google'] as LLMProvider[]) {
     try {
       const instance = await getProviderInstance(provider);
-      // Try a simple health check call
+      // Try a simple health check call with cheapest model
+      const model = provider === 'anthropic' ? 'claude-haiku-3-5' : 
+                    provider === 'openai' ? 'gpt-4o-mini' : 'gemini-2.0-flash';
       await instance.call(
-        'claude-3-haiku-20240307' as any, // Use cheapest model
+        model as any,
         'Say "OK"',
         null,
         { maxTokens: 10, temperature: 0 }
@@ -338,4 +1721,29 @@ export async function healthCheckProviders(): Promise<{ [provider: string]: bool
   }
   
   return results;
+}
+
+/**
+ * Get routing statistics and insights
+ */
+export async function getRoutingStats(days: number = 7): Promise<{
+  totalCalls: number;
+  byPreference: { [preference: string]: number };
+  byRequestType: { [requestType: string]: number };
+  byProvider: { [provider: string]: number };
+  averageCost: number;
+  totalCost: number;
+  downgrades: number;
+}> {
+  // This would typically query the database for statistics
+  // For now, return a placeholder structure
+  return {
+    totalCalls: 0,
+    byPreference: { quality: 0, balanced: 0, cost: 0 },
+    byRequestType: {},
+    byProvider: { anthropic: 0, openai: 0, google: 0 },
+    averageCost: 0,
+    totalCost: 0,
+    downgrades: 0,
+  };
 }
