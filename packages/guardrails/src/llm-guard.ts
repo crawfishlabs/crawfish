@@ -62,12 +62,12 @@ const INJECTION_PATTERNS: { pattern: RegExp; name: string }[] = [
   // Direct instruction override attempts
   { pattern: /ignore\s+(all\s+)?previous\s+(instructions?|prompts?|rules?|context)/i, name: 'ignore_previous' },
   { pattern: /disregard\s+(all\s+)?(previous|above|prior)\s+(instructions?|prompts?|rules?)/i, name: 'disregard_previous' },
-  { pattern: /forget\s+(all\s+)?(previous|above|prior|your)\s+(instructions?|prompts?|rules?|training)/i, name: 'forget_previous' },
+  { pattern: /forget\s+(all\s+)?(your\s+)?(previous|above|prior)?\s*(instructions?|prompts?|rules?|training)/i, name: 'forget_previous' },
   { pattern: /override\s+(your\s+)?(instructions?|rules?|safety|guidelines)/i, name: 'override_instructions' },
   
   // System prompt extraction
   { pattern: /(?:what|show|reveal|repeat|display|print|output)\s+(?:is\s+)?(?:your\s+)?system\s+prompt/i, name: 'system_prompt_extract' },
-  { pattern: /(?:show|reveal|print|output|display)\s+(?:your\s+)?(?:initial|original|full|complete)\s+(?:instructions?|prompt|rules?)/i, name: 'reveal_instructions' },
+  { pattern: /(?:show|reveal|print|output|display)\s+(?:me\s+)?(?:your\s+)?(?:initial|original|full|complete)\s+(?:instructions?|prompt|rules?)/i, name: 'reveal_instructions' },
   { pattern: /(?:what|tell)\s+(?:are|me)\s+(?:your\s+)?(?:instructions?|rules?|directives?)/i, name: 'tell_instructions' },
 
   // Role-play attacks

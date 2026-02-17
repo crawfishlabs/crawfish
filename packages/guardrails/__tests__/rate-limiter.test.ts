@@ -60,9 +60,9 @@ describe('createRateLimiter middleware', () => {
   function mockRes() {
     const headers: Record<string, string> = {};
     const res: any = {
-      setHeader: jest.fn((k: string, v: string) => { headers[k] = v; }),
-      status: jest.fn().mockReturnThis(),
-      json: jest.fn(),
+      setHeader: vi.fn((k: string, v: string) => { headers[k] = v; }),
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
       _headers: headers,
     };
     return res;
@@ -72,7 +72,7 @@ describe('createRateLimiter middleware', () => {
     const limiter = createRateLimiter({ maxRequests: 5, windowMs: 60_000 });
     const req = mockReq();
     const res = mockRes();
-    const next = jest.fn();
+    const next = vi.fn();
 
     await limiter(req, res, next);
     expect(next).toHaveBeenCalled();
@@ -82,7 +82,7 @@ describe('createRateLimiter middleware', () => {
   it('blocks requests over the limit with 429', async () => {
     const limiter = createRateLimiter({ maxRequests: 2, windowMs: 60_000 });
     const req = mockReq({ user: { uid: 'test-user' } });
-    const next = jest.fn();
+    const next = vi.fn();
 
     // First 2 should pass
     await limiter(req, mockRes(), next);
@@ -100,7 +100,7 @@ describe('createRateLimiter middleware', () => {
     const limiter = createRateLimiter({ maxRequests: 10, windowMs: 60_000 });
     const req = mockReq();
     const res = mockRes();
-    const next = jest.fn();
+    const next = vi.fn();
 
     await limiter(req, res, next);
     expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Limit', '10');
@@ -110,7 +110,7 @@ describe('createRateLimiter middleware', () => {
   it('respects burst allowance', async () => {
     const limiter = createRateLimiter({ maxRequests: 2, windowMs: 60_000, burstAllowance: 1 });
     const req = mockReq({ user: { uid: 'burst-user' } });
-    const next = jest.fn();
+    const next = vi.fn();
 
     await limiter(req, mockRes(), next);
     await limiter(req, mockRes(), next);
@@ -126,7 +126,7 @@ describe('createRateLimiter middleware', () => {
   it('includes Retry-After header on 429', async () => {
     const limiter = createRateLimiter({ maxRequests: 1, windowMs: 60_000 });
     const req = mockReq({ user: { uid: 'retry-user' } });
-    const next = jest.fn();
+    const next = vi.fn();
 
     await limiter(req, mockRes(), next);
     const res2 = mockRes();

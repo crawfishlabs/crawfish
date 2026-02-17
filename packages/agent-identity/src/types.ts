@@ -99,6 +99,9 @@ export type AuditAction =
   | 'credential.rotate'
   | 'credential.revoke'
   | 'credential.test'
+  | 'grant.requested'
+  | 'grant.approved'
+  | 'grant.denied'
   | 'identity.provision'
   | 'config.update';
 
