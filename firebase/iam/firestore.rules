@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users — only the user themselves or admin SDK
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false; // Server-side only via Admin SDK
+
+      // Entitlements subcollection
+      match /entitlements/{doc} {
+        allow read: if request.auth != null && request.auth.uid == uid;
+        allow write: if false;
+      }
+
+      // AI usage tracking
+      match /ai_usage/{date} {
+        allow read: if request.auth != null && request.auth.uid == uid;
+        allow write: if false;
+      }
+    }
+
+    // Invitations — sender can read; recipient can read by email lookup (via Cloud Function)
+    match /invitations/{invId} {
+      allow read: if request.auth != null && (
+        resource.data.fromUid == request.auth.uid
+      );
+      allow write: if false;
+    }
+
+    // Shared access — owner or shared user can read
+    match /shared_access/{accessId} {
+      allow read: if request.auth != null && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.sharedWithUid == request.auth.uid
+      );
+      allow write: if false;
+    }
+
+    // Plans — public read
+    match /plans/{planId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
