@@ -107,3 +107,7 @@ export { Orchestrator } from './orchestrator.js';
 export { loadConfig, generateDefaultConfig } from './config.js';
 export { GitHubProvider } from './providers/github.js';
 export { VercelProvider } from './providers/vercel.js';
+export { GrantQueue } from './grants.js';
+export type { Grant, GrantStatus } from './grants.js';
+export { NotificationDispatcher, TelegramNotifier, EmailNotifier, WebhookNotifier } from './notifications.js';
+export { createServer, startServer } from './api/server.js';

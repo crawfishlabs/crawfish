@@ -490,6 +490,200 @@ Agent: "I'll request Vercel access with deployment and domain permissions.
 
 ---
 
+## Consumer App Integration
+
+The agent identity broker isn't just for agents. It's a **universal connection broker** — any time a principal (human) authorizes a delegate (agent, app, service) to access a third-party service, it flows through the same system.
+
+### Two Personas, One Broker
+
+| | Agent Identity | User Account Linking |
+|---|---|---|
+| **Principal** | Developer (Sam) | App user (anyone) |
+| **Delegate** | AI agent (Craw) | Consumer app (Crawfish Budget) |
+| **Services** | GitHub, Vercel, AWS | Plaid, HealthKit, Google Calendar |
+| **Approval** | Dashboard / Telegram notification | In-app OAuth / consent flow |
+| **Storage** | Single vault (one agent) | Multi-tenant vault (per user) |
+| **API** | Same endpoints, same patterns | Same endpoints, same patterns |
+
+The only real differences are multi-tenancy (consumer apps have many users) and the approval UX (in-app vs. dashboard). The vault, audit, token rotation, and revocation are identical.
+
+### The Unified Pattern
+
+**Agent requesting GitHub access:**
+```
+Agent calls: POST /v1/grants/request
+  { principal: "craw", service: "github", scopes: ["repo"] }
+    ↓
+Broker notifies human → human approves in dashboard → OAuth in browser
+    ↓
+Broker stores token → Agent polls GET /v1/credentials/github → uses token
+```
+
+**User connecting their bank in Crawfish Budget:**
+```
+App calls: POST /v1/grants/request
+  { principal: "user_abc123", service: "plaid", scopes: ["transactions:read"] }
+    ↓
+Broker returns Plaid Link token/URL
+    ↓
+User completes Plaid Link in-app WebView → callback to broker
+    ↓
+Broker exchanges for access token → stores in vault keyed to user
+    ↓
+App calls: GET /v1/credentials/plaid?principal=user_abc123 → fetches transactions
+```
+
+Same broker. Same vault. Same audit trail. Same revocation. Different UX wrapper.
+
+### Crawfish Budget — Account Linking
+
+Financial data connections via Plaid (and Apple FinanceKit for Apple Card).
+
+| Source | Provider | Auth Method | Data |
+|--------|----------|-------------|------|
+| Bank accounts | Plaid | Plaid Link (OAuth-like) | Transactions, balances |
+| Credit cards | Plaid | Plaid Link | Transactions, balances, due dates |
+| Investment accounts | Plaid | Plaid Link | Holdings, transactions |
+| Apple Card | FinanceKit | iOS 17.4+ system permission | Transactions (on-device → sync) |
+
+**Plaid flow via broker:**
+1. User taps "Connect Bank" in Budget app
+2. App → `POST /v1/grants/request { principal: userId, service: "plaid", scopes: ["transactions:read", "balances:read"] }`
+3. Broker creates Plaid Link token via Plaid API → returns `link_token` to app
+4. App opens Plaid Link (WebView or SDK) → user selects bank, authenticates
+5. Plaid Link callback → `POST /v1/oauth/plaid/callback { public_token, metadata }`
+6. Broker exchanges public_token for access_token → stores in vault keyed to `principal: userId`
+7. Grant status → "active"
+8. App → `GET /v1/credentials/plaid?principal=userId` → gets access_token → fetches transactions
+
+**Apple FinanceKit (different pattern — not OAuth):**
+- iOS 17.4+ only, on-device permission
+- No server-side token — data is read directly on-device via FinanceKit framework
+- Broker role: receive synced transactions from the iOS app, store in user's data
+- Pattern E (new): **Device-side permission → local sync → broker receives data**
+
+**Token lifecycle:**
+- Plaid access tokens don't expire but can be rotated
+- Broker monitors Plaid webhooks for token invalidation (ITEM_LOGIN_REQUIRED)
+- On invalidation: notify user "Your bank connection needs re-authentication" → app shows Plaid Link again
+- User can revoke any bank connection from app settings → `DELETE /v1/credentials/plaid?principal=userId`
+
+### Crawfish Health — Data Sources
+
+Health and fitness data from multiple sources.
+
+| Source | Provider | Auth Method | Data |
+|--------|----------|-------------|------|
+| Apple Health | HealthKit | iOS system permission | Workouts, steps, HR, body measurements |
+| Garmin | Garmin Connect API | OAuth 1.0a | Activities, sleep, body composition |
+| Fitbit | Fitbit Web API | OAuth 2.0 | Activities, sleep, heart rate |
+| Whoop | Whoop API | OAuth 2.0 | Strain, recovery, sleep, HR |
+| MyFitnessPal | MFP export | One-time CSV/API import | Food diary history |
+| Barcode scanner | OpenFoodFacts | No auth (public API) | Nutrition data by barcode |
+
+**OAuth fitness trackers (Garmin, Fitbit, Whoop) via broker:**
+1. User taps "Connect Garmin" in Health app
+2. App → `POST /v1/grants/request { principal: userId, service: "garmin", scopes: ["activities:read", "sleep:read"] }`
+3. Broker returns OAuth authorization URL
+4. User completes OAuth in in-app browser
+5. Callback → broker stores token → grant active
+6. App syncs data via `GET /v1/credentials/garmin?principal=userId`
+
+**Apple HealthKit (device-side, not OAuth):**
+- Similar to FinanceKit — iOS system permission, data lives on device
+- Broker receives synced data from the iOS app (not a token)
+- Pattern E: no server-stored credential, just a "connected" flag + data sync pipeline
+- Broker still tracks this as a "grant" for consistency in the UI ("Connected sources" screen)
+
+**OpenFoodFacts (public API, no auth):**
+- No credential needed, but broker still routes requests for:
+  - Rate limiting (respect API limits)
+  - Caching (same barcode = same data)
+  - Audit (track what user scanned)
+- Registered as a "service" in the broker with `method: "public-api"` (no auth flow)
+
+### Crawfish Meetings — Calendar & Communication
+
+Calendar access and meeting integrations.
+
+| Source | Provider | Auth Method | Data |
+|--------|----------|-------------|------|
+| Google Calendar | Google OAuth | OAuth 2.0 | Events, availability |
+| Outlook Calendar | Microsoft Graph | OAuth 2.0 | Events, availability |
+| Zoom | Zoom OAuth | OAuth 2.0 | Meeting metadata, recordings |
+| Slack | Slack OAuth | OAuth 2.0 | Post summaries, channel access |
+
+**Standard OAuth flow via broker — all four follow the same pattern:**
+1. User taps "Connect Google Calendar"
+2. App → `POST /v1/grants/request { principal: userId, service: "google-calendar", scopes: ["calendar.readonly"] }`
+3. Broker returns Google OAuth consent URL
+4. User authorizes in browser → callback → token stored
+5. App reads calendar via broker-stored credential
+
+**Multi-calendar merge:**
+- User connects both Google and Outlook
+- App fetches both via broker → merges into unified view
+- Each connection is an independent grant with its own token, scopes, and revocation
+
+### Pattern E — Device-Side Permission (New)
+
+For data sources that live on-device (HealthKit, FinanceKit, contacts, photos):
+
+```
+User                     iOS App                Broker
+  │                        │                      │
+  │  "Connect Apple Health"│                      │
+  ├───────────────────────►│                      │
+  │                        │                      │
+  │◄── iOS permission ─────┤                      │
+  │    dialog              │                      │
+  │                        │                      │
+  ├── Grants permission ──►│                      │
+  │                        │                      │
+  │                        ├─ POST /v1/grants ───►│
+  │                        │  { service: "healthkit",│
+  │                        │    method: "device",    │
+  │                        │    status: "active" }   │
+  │                        │                      │
+  │                        │  (reads data locally)│
+  │                        ├─ POST /v1/sync ─────►│
+  │                        │  { data: [...] }     │
+  │                        │                      │
+```
+
+No server-stored credential. The grant record exists for:
+- Unified "Connected Services" UI (user sees all connections in one place)
+- Revocation tracking (user disconnects → app stops reading)
+- Audit (when was HealthKit connected/disconnected)
+
+### Multi-Tenancy for Consumer Apps
+
+Agent identity is single-tenant (one agent, one human). Consumer apps are multi-tenant. The broker handles this via the `principal` field:
+
+```
+// Agent use — principal is the agent name
+POST /v1/grants/request { principal: "craw", service: "github" }
+GET /v1/credentials/github?principal=craw
+
+// Consumer app — principal is the user ID
+POST /v1/grants/request { principal: "user_abc123", service: "plaid" }
+GET /v1/credentials/plaid?principal=user_abc123
+```
+
+**Vault partitioning:**
+- Each principal gets an isolated key space in the vault
+- `user_abc123:plaid` → encrypted credential
+- `user_abc123:garmin` → encrypted credential
+- `craw:github` → encrypted credential
+- No cross-principal access without explicit delegation
+
+**Scaling path:**
+- MVP: single encrypted JSON file (fine for single agent + small app)
+- V2: SQLite/Turso vault backend (handles thousands of users)
+- V3: PostgreSQL + KMS (enterprise scale)
+
+---
+
 ## Security Model
 
 ### Encryption at Rest
@@ -580,7 +774,10 @@ packages/agent-identity/
 │   └── providers/
 │       ├── base.ts              # Base provider interface
 │       ├── github.ts            # GitHub OAuth
-│       └── vercel.ts            # Vercel OAuth
+│       ├── vercel.ts            # Vercel OAuth
+│       ├── plaid.ts             # Plaid bank linking
+│       ├── apple-health.ts      # Apple HealthKit (device-side)
+│       └── google-calendar.ts   # Google Calendar OAuth
 └── __tests__/
     ├── vault.test.ts            # Vault encryption tests
     ├── totp.test.ts             # TOTP generation tests

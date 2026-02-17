@@ -181,18 +181,97 @@ crawfish-identity audit --since 7d          # GET /v1/audit?since=7d
 
 ---
 
+## Platform Service — The Bigger Play
+
+Agent identity is use case #1. But the broker is generic: **any time a principal authorizes a delegate to access a service, it flows through the same system.** This makes it a platform service for every Crawfish app.
+
+### The Insight
+
+Every Crawfish platform customer needs their users to connect third-party services:
+- **Crawfish Budget** → bank accounts (Plaid), Apple Card (FinanceKit)
+- **Crawfish Health** → fitness trackers (Garmin, Fitbit, Whoop), Apple HealthKit
+- **Crawfish Meetings** → calendars (Google, Outlook), video (Zoom), messaging (Slack)
+- **Any future app** → whatever services their users need
+
+Today, every app builds its own OAuth integration, token storage, refresh logic, and revocation UI. It's the same plumbing every time. The broker eliminates this.
+
+### What We Become
+
+**"Plaid but for everything"** — a unified connection management layer across:
+- Banks and financial accounts
+- Fitness trackers and health data
+- Calendars and productivity tools
+- Developer tools and infrastructure
+- AI agent credentials
+
+One API. One vault. One audit trail. One "Connected Services" UI.
+
+### Same Broker, Two Personas
+
+| | Agent Identity | User Account Linking |
+|---|---|---|
+| **Principal** | Developer (Sam) | App user (anyone) |
+| **Delegate** | AI agent (Craw) | Consumer app |
+| **Services** | GitHub, Vercel, AWS | Plaid, Garmin, Google Cal |
+| **Approval UX** | Dashboard / notification | In-app OAuth / consent |
+| **Tenancy** | Single-tenant | Multi-tenant (per user) |
+| **API** | Identical | Identical |
+
+### Revenue Model
+
+| Tier | Price | Included |
+|------|-------|----------|
+| **Free** | $0/mo | 3 active connections, 1 app |
+| **Pro** | $10/mo | Unlimited connections, 3 apps, priority support |
+| **Platform** | $0.05/active connection/mo | For apps with many users — scales with usage |
+| **Enterprise** | Custom | SOC2, SSO, SLA, dedicated vault |
+
+An app with 10,000 users averaging 3 connections each = 30,000 active connections = $1,500/mo.
+
+### Crawfish Platform Integration
+
+Every app built on the Crawfish platform gets the broker as a built-in service:
+```typescript
+// In any Crawfish app
+import { connections } from '@crawfish/platform';
+
+// User connects their bank
+const plaidLink = await connections.requestAccess(userId, 'plaid', {
+  scopes: ['transactions:read'],
+});
+// Returns Plaid Link URL → user completes in-app
+
+// Later: fetch transactions
+const token = await connections.getCredential(userId, 'plaid');
+const transactions = await plaid.getTransactions(token);
+```
+
+No OAuth boilerplate. No token storage. No refresh logic. It just works.
+
+### Competitive Position as Platform
+
+| Solution | What they do | Gap |
+|----------|-------------|-----|
+| **Plaid** | Financial data only | $$$, banks only, no fitness/calendar/dev tools |
+| **Merge.dev** | Unified API for HR/ATS/CRM | Enterprise only, no consumer, no agents |
+| **Nango** | 250+ OAuth integrations | Token management only, no identity provisioning, no consumer UX |
+| **Paragon** | Embedded integrations | White-label OAuth UX, not a credential broker |
+| **Crawfish Broker** | **Universal connection broker: agents + apps + users** | — |
+
 ## V3 — Standalone Product
 
-**Timeline:** When agent identity becomes a market category
+**Timeline:** When the broker proves itself across Crawfish apps
 
 | Feature | Details |
 |---------|---------|
 | Multi-agent | Multiple agents per human, each with own identity |
+| Multi-tenant vault | SQLite/Turso → PostgreSQL scaling path |
 | Enterprise SSO | SAML/OIDC integration for corporate identity providers |
 | SOC2 compliance | Audit trail meets compliance requirements |
 | Agent directory | Discover and verify agent identities (like Keybase for agents) |
 | Hosted vault | Cloud-managed vault option (vs. local file) |
-| Pricing | Free tier (3 services) → Pro ($10/mo unlimited) → Enterprise |
+| Provider marketplace | Community-contributed provider integrations |
+| Usage-based pricing | Per active connection per month |
 
 ---
 

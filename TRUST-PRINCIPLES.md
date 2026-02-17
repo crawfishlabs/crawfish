@@ -140,6 +140,55 @@ When Crawfish Platform generates fix proposals for other developers' apps:
 - Experiment results are transparent — not just "variant B won" but "here's the statistical analysis"
 - Auto-pilot mode requires explicit opt-in and produces a daily digest of actions taken
 
+## 11. Optimized Experiences — The Best of Both Worlds
+
+"We know best" and "the customer knows best" is a false dichotomy. In an AI-native world, we can do both simultaneously.
+
+**The concept:** Learn from power users and top performers across the entire user base what actually works — then offer those patterns as an "optimized experience" that any user can opt into, customize, or opt out of at any time.
+
+**How it works:**
+
+```
+Aggregate data: What do the top 10% of budgeters do?
+    → They categorize within 24 hours
+    → They check Safe to Spend before purchases
+    → They review subscriptions monthly
+    → They use rollover, not fresh-start
+    ↓
+Offer as "Optimized Experience":
+    "Based on what successful budgeters do, we'd suggest:
+     • Auto-prompt to categorize daily (not weekly)
+     • Safe to Spend widget on home screen
+     • Monthly subscription review reminder
+     Try it for 2 weeks? You can switch back anytime."
+```
+
+**Key principles:**
+
+1. **Optimized ≠ locked.** It's a starting point, not a prison. The user can customize any individual setting while keeping the rest optimized.
+
+2. **Transparent reasoning.** Never just "trust us." Always: "Users who do X see 23% better budget adherence. Want to try it?"
+
+3. **Partial adoption.** User can accept some optimized suggestions and reject others. "I like the daily categorization reminder but I don't want the subscription review."
+
+4. **Easy escape hatch.** One toggle: "Switch to optimized" / "Switch to custom." If someone's gone too far customizing and is struggling, we can suggest: "Want to try the optimized experience for a week? Based on your usage, we think [specific changes] would help."
+
+5. **Segment-aware.** "Optimized" isn't one-size-fits-all. A college student's optimized experience differs from a dual-income family's. The AI knows which segment's power users to learn from.
+
+6. **Evolves with data.** As more users join and we collect more data, the optimized experience gets better. This is the adaptive loop applied to UX itself, not just features.
+
+**Per-app examples:**
+
+| App | What optimized looks like |
+|-----|--------------------------|
+| **Budget** | Category structure, categorization frequency, rollover mode, Safe to Spend placement, alert thresholds |
+| **Health** | Rest timer duration, progressive overload %, exercise ordering, AI coaching frequency |
+| **Meetings** | Summary format, action item style, follow-up timing, sharing defaults |
+
+**The pitch to users:** "You can set everything up yourself, or let us configure your experience based on what works best for people like you. Either way, you're always in control."
+
+**The pitch to the platform:** This is a meta-experiment. The optimized experience IS an experiment variant — we can measure whether users who adopt it have better outcomes (retention, goal achievement, NPS) vs. fully custom users. The data feeds back into improving the optimized defaults.
+
 ---
 
 ## Implementation Checklist
