@@ -1,5 +1,11 @@
 # Mac Day Checklist — Tuesday Feb 18, 2026
 
+## Legal (Do First)
+- [ ] File **Crawfish Labs LLC** — Maryland SDAT online (~$100, 10 min)
+- [ ] Get **EIN** from IRS (free, instant online: https://www.irs.gov/businesses/small-businesses-self-employed/apply-for-an-employer-identification-number-ein-online)
+- [ ] Open business bank account (separate from personal)
+- [ ] Register Apple Developer as **Organization** under Crawfish Labs LLC ($99)
+
 ## Environment Setup
 - [ ] Xcode installed + command line tools (`xcode-select --install`)
 - [ ] Homebrew installed

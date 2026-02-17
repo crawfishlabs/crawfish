@@ -1,5 +1,10 @@
 /**
  * @fileoverview @claw/guardrails — Core guardrails for all Claw apps
+ *
+ * TODO(@claw/core migration): Replace direct firebase-admin imports with @claw/core adapters:
+ *   - rate-limiter.ts: firestore for rate limit state → CrawfishStore adapter
+ *   - llm-guard.ts: firestore for rule storage → CrawfishStore adapter
+ *   - output-guard.ts: event logging → CrawfishEventBus adapter
  */
 
 // Rate limiting

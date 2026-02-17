@@ -1,0 +1,17 @@
+{
+  "name": "@crawfish/sdk",
+  "version": "0.1.0",
+  "description": "Crawfish SDK — track events, run experiments, collect feedback",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src/"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  },
+  "keywords": ["crawfish", "analytics", "experiments", "feedback", "ai"],
+  "license": "MIT"
+}
