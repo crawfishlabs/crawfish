@@ -1,0 +1,58 @@
+stages:
+  - lint
+  - test
+  - build
+  - publish
+
+variables:
+  NODE_VERSION: "18"
+
+.node_setup: &node_setup
+  image: node:${NODE_VERSION}
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+      - packages/*/node_modules/
+  before_script:
+    - npm ci
+
+lint:
+  <<: *node_setup
+  stage: lint
+  script:
+    - npm run lint --workspaces --if-present
+
+test:
+  <<: *node_setup
+  stage: test
+  script:
+    - npm test --workspaces --if-present
+  coverage: '/All files[^|]*\|[^|]*\s+([\d\.]+)/'
+
+build:
+  <<: *node_setup
+  stage: build
+  script:
+    - npm run build --workspaces --if-present
+  artifacts:
+    paths:
+      - packages/*/dist/
+    expire_in: 1 week
+
+publish:
+  <<: *node_setup
+  stage: publish
+  only:
+    - main
+    - tags
+  script:
+    - echo "//${CI_SERVER_HOST}/api/v4/projects/${CI_PROJECT_ID}/packages/npm/:_authToken=${CI_JOB_TOKEN}" > .npmrc
+    - |
+      for pkg in packages/*/; do
+        if [ -f "$pkg/package.json" ]; then
+          cd "$pkg"
+          npm publish --registry "https://${CI_SERVER_HOST}/api/v4/projects/${CI_PROJECT_ID}/packages/npm/" || true
+          cd ../..
+        fi
+      done
