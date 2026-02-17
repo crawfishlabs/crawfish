@@ -11,6 +11,8 @@ declare global {
     interface Request {
       userId?: string;
       entitlements?: Entitlements;
+      authProvider?: string;
+      emailVerified?: boolean;
     }
   }
 }
@@ -44,9 +46,11 @@ export function createIAMMiddleware(iamService: IAMService) {
           return res.status(401).json({ error: 'Unauthorized' });
         }
 
-        const { uid, entitlements } = await iamService.verifyToken(token);
+        const { uid, entitlements, provider, emailVerified } = await iamService.verifyToken(token);
         req.userId = uid;
         req.entitlements = entitlements;
+        req.authProvider = provider;
+        req.emailVerified = emailVerified;
 
         // Check app access
         if (options?.requireApp) {

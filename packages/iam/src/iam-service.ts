@@ -94,16 +94,77 @@ export class IAMService {
   // Authentication
   // -----------------------------------------------------------------------
 
-  async verifyToken(idToken: string): Promise<{ uid: string; entitlements: Entitlements }> {
+  /**
+   * Verify a Firebase ID token. Works for all provider types:
+   * - Email/password
+   * - Google (google.com)
+   * - Apple (apple.com)
+   *
+   * Firebase Admin SDK handles provider-agnostic verification.
+   * The decoded token includes `firebase.sign_in_provider` for audit.
+   */
+  async verifyToken(idToken: string): Promise<{
+    uid: string;
+    entitlements: Entitlements;
+    provider: string;
+    emailVerified: boolean;
+  }> {
     const decoded = await this.auth.verifyIdToken(idToken);
     const uid = decoded.uid;
+    const provider = (decoded as any).firebase?.sign_in_provider ?? 'unknown';
+    const emailVerified = decoded.email_verified ?? false;
 
     const cached = this.cache.get<Entitlements>(`entitlements:${uid}`);
-    if (cached) return { uid, entitlements: cached };
+    if (cached) {
+      return { uid, entitlements: cached, provider, emailVerified };
+    }
+
+    // Auto-provision IAM user record on first token verify (handles
+    // social sign-in where client may not call /auth/register)
+    const userDoc = await this.db.collection('users').doc(uid).get();
+    if (!userDoc.exists) {
+      await this.autoProvisionUser(uid, decoded);
+    }
+
+    // Update lastLoginAt
+    await this.db.collection('users').doc(uid).update({
+      lastLoginAt: admin.firestore.Timestamp.now(),
+    }).catch(() => {}); // best-effort
 
     const entitlements = await this.getEntitlements(uid);
     this.cache.set(`entitlements:${uid}`, entitlements);
-    return { uid, entitlements };
+    return { uid, entitlements, provider, emailVerified };
+  }
+
+  /**
+   * Auto-provision a user record when they first authenticate via
+   * social provider (Google/Apple) without going through /auth/register.
+   */
+  private async autoProvisionUser(
+    uid: string,
+    decoded: admin.auth.DecodedIdToken,
+  ): Promise<void> {
+    const plan = PLANS.free;
+    const entitlements = deriveEntitlements(plan);
+    const now = new Date();
+
+    const user: CrawfishUser = {
+      uid,
+      email: decoded.email ?? '',
+      displayName: decoded.name,
+      photoUrl: decoded.picture,
+      createdAt: now,
+      lastLoginAt: now,
+      plan,
+      billingStatus: 'free',
+      entitlements,
+      timezone: 'America/Chicago',
+      locale: 'en-US',
+      onboardingCompleted: false,
+    };
+
+    await this.db.collection('users').doc(uid).set(this.serializeUser(user));
+    await this.db.doc(`users/${uid}/entitlements/current`).set(entitlements);
   }
 
   // -----------------------------------------------------------------------
