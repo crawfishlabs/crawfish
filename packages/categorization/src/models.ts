@@ -99,6 +99,69 @@ export interface DetectedIncome {
   confidence: number;
 }
 
+// ─── Continuous Improvement Types ────────────────────────────────────────────
+
+export interface CategorizationDecision {
+  id?: string;
+  descriptor: string;
+  cleanedDescriptor: string;
+  suggestedCategory: string;
+  finalCategory: string;
+  accepted: boolean;
+  source: string;
+  confidence: number;
+  userId: string;
+  timestamp: Date;
+}
+
+export interface DateRange {
+  start: Date;
+  end: Date;
+}
+
+export interface LayerAccuracy {
+  layer: string;
+  total: number;
+  correct: number;
+  accuracy: number;
+}
+
+export interface MisCategorizedDescriptor {
+  descriptor: string;
+  suggestedCategory: string;
+  correctedCategory: string;
+  occurrences: number;
+  userIds: number; // distinct user count
+}
+
+export interface AccuracyReport {
+  dateRange: DateRange;
+  overallAccuracy: number;
+  totalDecisions: number;
+  perLayerAccuracy: LayerAccuracy[];
+  perCategoryAccuracy: Record<string, { total: number; correct: number; accuracy: number }>;
+  aiFallbackRate: number;
+  correctionRate: number;
+  topCorrectedDescriptors: MisCategorizedDescriptor[];
+  improvementTrend: { date: string; accuracy: number }[];
+}
+
+export interface ImprovementAction {
+  type: 'promote_to_known' | 'update_community' | 'flag_for_review' | 'adjust_confidence' | 'prune_stale';
+  descriptor: string;
+  details: string;
+  timestamp: Date;
+}
+
+export interface MerchantCandidate {
+  descriptor: string;
+  cleanName: string;
+  category: string;
+  totalCategorizations: number;
+  agreement: number; // 0-1
+  distinctUsers: number;
+}
+
 // ─── Storage Interface (injectable) ──────────────────────────────────────────
 
 export interface CategorizationStore {
@@ -108,6 +171,22 @@ export interface CategorizationStore {
   getCommunityMapping(descriptorHash: string): Promise<CommunityMapping | null>;
   saveCommunityMapping(descriptorHash: string, mapping: CommunityMapping): Promise<void>;
   recordAccuracy(userId: string, descriptor: string, suggested: string, actual: string): Promise<void>;
+
+  // Continuous improvement store methods
+  recordDecision(decision: CategorizationDecision): Promise<void>;
+  getDecisions(dateRange: DateRange): Promise<CategorizationDecision[]>;
+  getDecisionsByDescriptor(descriptor: string, limit?: number): Promise<CategorizationDecision[]>;
+  getDecisionStats(dateRange: DateRange): Promise<{
+    total: number;
+    accepted: number;
+    bySource: Record<string, { total: number; correct: number }>;
+    byCategory: Record<string, { total: number; correct: number }>;
+  }>;
+  getDailyAccuracy(days: number): Promise<{ date: string; accuracy: number; total: number }[]>;
+  getTopMisCategorized(dateRange: DateRange, minOccurrences: number): Promise<MisCategorizedDescriptor[]>;
+  recordImprovementAction(action: ImprovementAction): Promise<void>;
+  getFrequentDescriptors(minCount: number, minAgreement: number): Promise<MerchantCandidate[]>;
+  pruneStaleMapping(descriptorHash: string): Promise<void>;
 }
 
 // ─── AI Provider Interface ───────────────────────────────────────────────────
