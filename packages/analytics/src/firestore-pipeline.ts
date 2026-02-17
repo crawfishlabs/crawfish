@@ -5,7 +5,7 @@
  * 1. Direct Snowflake REST API inserts (recommended for low-medium volume)
  * 2. GCS staging with Snowpipe auto-ingest (recommended for high volume)
  * 
- * Use this as a replacement for Firebase Extensions BigQuery Export
+ * Replaces the legacy Firebase Extensions BigQuery Export with Snowflake
  */
 
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
@@ -667,12 +667,11 @@ Add transform functions to pipeline configs:
 - Data quality checks
 - Anomaly detection
 
-## Migration from BigQuery
-1. Set up Snowflake pipeline in parallel
-2. Backfill historical data
-3. Verify data consistency
-4. Switch applications to Snowflake
-5. Deprecate BigQuery export
+## Analytics Stack
+- **Data warehouse:** Snowflake (CLAW_ANALYTICS database)
+- **Pipeline:** Firestore → Snowflake via direct REST or GCS staging + Snowpipe
+- **Queries:** Standard SQL, Snowflake dialect
+- **Cost:** Snowflake free trial → pay-as-you-go at scale
 `;
 
 export default {
