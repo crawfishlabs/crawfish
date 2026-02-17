@@ -13,6 +13,7 @@ import {
   DecisionLog,
 } from './models';
 import { chiSquaredTest, tTest, calculateLift, calculateConfidence, isSignificant } from './statistics';
+import { SENTIMENT_METRICS, SENTIMENT_GUARDRAILS } from '@claw/sentiment';
 
 // ─── Firestore Abstraction ──────────────────────────────────────────────────
 
