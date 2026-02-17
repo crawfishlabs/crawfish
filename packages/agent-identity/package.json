@@ -1,0 +1,30 @@
+{
+  "name": "@crawfish/agent-identity",
+  "version": "0.1.0",
+  "description": "Identity layer for AI agents — managed, scoped, revocable credentials",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "crawfish-identity": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --experimental-vm-modules node_modules/.bin/vitest run",
+    "test:watch": "node --experimental-vm-modules node_modules/.bin/vitest",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.7.0",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

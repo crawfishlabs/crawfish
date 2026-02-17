@@ -1,0 +1,33 @@
+# Crawfish Agent Identity Configuration
+# Docs: ARCHITECTURE.md | CLI: crawfish-identity --help
+
+agent:
+  name: craw
+  owner: sam@crawfishlabs.ai
+
+identity:
+  email:
+    provider: cloudflare
+    domain: crawfishlabs.ai
+    address: craw@crawfishlabs.ai
+  phone:
+    provider: twilio
+    enabled: false  # v2
+  authenticator:
+    type: totp
+    vault_path: ~/.crawfish/vault.enc
+
+services:
+  github:
+    method: oauth
+    scopes: [repo, read:org, write:org]
+    org: crawfishlabs
+    username: crawfish-openclaw
+  vercel:
+    method: oauth
+    scopes: [deployments:write, domains:read]
+    team: crawfishlabs
+
+audit:
+  path: ~/.crawfish/agent-audit.jsonl
+  retention_days: 90
