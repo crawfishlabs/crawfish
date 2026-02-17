@@ -23,6 +23,7 @@ import { GoogleProvider } from './providers/google';
 import { createFallbackChain } from './fallback';
 import { trackLLMCall, checkUsageLimits, getCostEstimate } from './cost-tracker';
 import { v4 as uuidv4 } from 'uuid';
+import { sanitizeUserInput, validateLLMOutput } from '@claw/guardrails';
 
 /**
  * Global router configuration
@@ -1506,6 +1507,13 @@ export async function routeLLMCall(
       }
     }
     
+    // ── Guardrails: sanitize user input ──
+    const sanitizeResult = sanitizeUserInput(prompt);
+    if (sanitizeResult.flagged) {
+      console.warn(`[guardrails] Flagged input from user ${userId} for ${requestType}:`, sanitizeResult.patterns);
+    }
+    const sanitizedPrompt = sanitizeResult.sanitized;
+
     // Handle model override
     let finalRouting = routing;
     if (options.modelOverride) {
@@ -1542,7 +1550,19 @@ export async function routeLLMCall(
         }
         
         const providerInstance = await getProviderInstance(provider);
-        const response = await providerInstance.call(model, prompt, context, finalOptions);
+        const response = await providerInstance.call(model, sanitizedPrompt, context, finalOptions);
+        
+        // ── Guardrails: validate LLM output ──
+        const outputValidation = validateLLMOutput(response.content, {
+          checkSystemPromptLeak: true,
+          checkPII: false, // PII check is opt-in at app level
+        });
+        if (!outputValidation.valid) {
+          console.warn(`[guardrails] Output validation issues for ${requestType}:`, outputValidation.issues);
+          if (outputValidation.sanitizedOutput) {
+            response.content = outputValidation.sanitizedOutput;
+          }
+        }
         
         // Deduct cost from user budget
         await deductBudget(userId, response.estimatedCost, requestType, model);

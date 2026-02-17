@@ -1,10 +1,21 @@
 /**
  * @fileoverview Claw Platform LLM Router Module
- * @description Model routing, provider management, cost tracking, and fallback handling with budget enforcement
+ * @description Model routing, provider management, cost tracking, fallback handling with budget enforcement, and guardrails integration
  */
 
 export * from './types';
 export { routeLLMCall, getModelForRequestType } from './router';
+
+// Re-export guardrails for convenience
+export {
+  sanitizeUserInput,
+  createSafeSystemPrompt,
+  validateLLMOutput,
+  createOutputGuard,
+  createRateLimiter,
+  RATE_LIMIT_PRESETS,
+  getDisclaimer,
+} from '@claw/guardrails';
 export { AnthropicProvider } from './providers/anthropic';
 export { OpenAIProvider } from './providers/openai';
 export { GoogleProvider } from './providers/google';

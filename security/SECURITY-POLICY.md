@@ -154,9 +154,60 @@ This document defines the security policy for all Claw applications and the shar
 - [ ] Firestore rules audited
 - [ ] Monitoring and alerting configured
 
+## Guardrails Architecture (`@claw/guardrails`)
+
+All Claw apps MUST integrate the `@claw/guardrails` package before shipping to production.
+
+### Components
+
+| Module | Purpose |
+|--------|---------|
+| `rate-limiter.ts` | Per-user, per-endpoint sliding window rate limiting with presets (AI_COACH: 10/min, QUERY: 30/min, STANDARD: 60/min) |
+| `llm-guard.ts` | Prompt injection detection & sanitization, safe system prompt wrapping, output validation |
+| `output-guard.ts` | Domain-specific output validation (fitness, nutrition, finance, meetings), dangerous content blocking, auto-disclaimer injection |
+| `disclaimers.ts` | Centralized disclaimer constants (short + full versions, i18n-ready) |
+
+### How It Works
+
+1. **User input** → `sanitizeUserInput()` strips injection patterns, flags suspicious input
+2. **System prompt** → `createSafeSystemPrompt()` wraps with injection-resistant framing
+3. **LLM output** → `validateLLMOutput()` checks for system prompt leaks, PII, blocked patterns
+4. **Domain output** → `createOutputGuard(domain)` validates domain-specific safety rules, appends disclaimers
+
+### LLM Router Integration
+
+The `@claw/llm-router` auto-applies guardrails:
+- Every user message is sanitized via `sanitizeUserInput()` before being sent to any LLM
+- Every LLM response is validated via `validateLLMOutput()` for system prompt leaks
+- Rate limiting hooks are available per-user via middleware presets
+
+### App-Level Compliance Requirements
+
+Each app **MUST**:
+
+1. **Rate limit all AI endpoints** using `@claw/guardrails` presets or custom configs
+2. **Use `createSafeSystemPrompt()`** for all system prompts sent to LLMs
+3. **Apply `createOutputGuard(domain)`** to all AI coach responses before returning to users
+4. **Never hardcode system prompts** in client-side code
+5. **Never return raw LLM responses** without output validation
+6. **Log all flagged injection attempts** for security review
+
+### App-Level Security Review Checklist
+
+- [ ] All AI endpoints rate-limited with appropriate preset
+- [ ] System prompts wrapped with `createSafeSystemPrompt()`
+- [ ] Output guard configured for app domain (fitness/nutrition/finance/meetings)
+- [ ] Disclaimers displayed on onboarding AND in AI responses
+- [ ] No system prompt content exposed to clients
+- [ ] Injection attempt logging enabled
+- [ ] PII validation enabled for user-facing outputs
+- [ ] Dangerous content patterns tested for the app's domain
+- [ ] Rate limit headers returned to clients
+- [ ] 429 responses handled gracefully in client UI
+
 ---
 
-**Last Updated**: 2026-02-16
+**Last Updated**: 2026-02-17
 **Next Review**: 2026-05-16
 **Owner**: Sam
 **Approvers**: Security Team

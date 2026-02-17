@@ -10,6 +10,7 @@
     "dev": "tsc --watch"
   },
   "dependencies": {
+    "@claw/guardrails": "1.0.0",
     "@anthropic-ai/sdk": "^0.24.0",
     "openai": "^4.0.0",
     "@google/generative-ai": "^0.12.0",
