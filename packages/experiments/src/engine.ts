@@ -257,6 +257,36 @@ export class ExperimentEngine {
       }
     }
 
+    // ── Sentiment Guardrails ──────────────────────────────────────────
+    // Check default sentiment guardrails against feedback data
+    const feedback = await this.store.getFeedback(experimentId);
+    if (feedback.length > 0) {
+      for (const guard of SENTIMENT_GUARDRAILS) {
+        // Calculate sentiment metric per variant
+        for (const variant of experiment.variants) {
+          if (variant.id === controlVariant.id) continue;
+          const variantFeedback = feedback.filter((f: any) => f.variant === variant.id || f.variantId === variant.id);
+          const controlFeedback = feedback.filter((f: any) => f.variant === controlVariant.id || f.variantId === controlVariant.id);
+
+          if (guard.metricId === 'negative_reaction_rate' && variantFeedback.length > 0) {
+            const negRate = variantFeedback.filter((f: any) => f.sentiment === 'negative').length / variantFeedback.length;
+            if (negRate > guard.threshold) {
+              breachedGuardrails.push(`Sentiment: negative reaction rate ${(negRate * 100).toFixed(0)}% exceeds ${guard.threshold * 100}% (variant: ${variant.name})`);
+            }
+          }
+
+          if (guard.metricId === 'nps_score' && variantFeedback.length >= 10 && controlFeedback.length >= 10) {
+            const avgVariant = variantFeedback.reduce((s: number, f: any) => s + (f.score || 0), 0) / variantFeedback.length;
+            const avgControl = controlFeedback.reduce((s: number, f: any) => s + (f.score || 0), 0) / controlFeedback.length;
+            const delta = avgVariant - avgControl;
+            if (delta < guard.threshold) {
+              breachedGuardrails.push(`Sentiment: NPS delta ${delta.toFixed(1)} below threshold ${guard.threshold} (variant: ${variant.name})`);
+            }
+          }
+        }
+      }
+    }
+
     const guardrailStatus = breachedGuardrails.length > 0 ? 'breached' as const : 'all_green' as const;
 
     // Total sample
